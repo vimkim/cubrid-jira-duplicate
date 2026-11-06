@@ -5,12 +5,14 @@ Uses only anonymous reads of the public JIRA REST API on jira.cubrid.org.
 Run: python3 -I scripts/measure_cbrd.py
 """
 import json
+import math
 import re
 import statistics
 import sys
 import urllib.parse
 import urllib.request
 from collections import Counter
+from datetime import datetime
 
 BASE = "http://jira.cubrid.org/rest/api/2/search"
 HANGUL = re.compile(r"[가-힣]")
@@ -25,6 +27,13 @@ def search(jql, fields="key", max_results=0):
 
 def total(jql):
     return search(jql)["total"]
+
+
+def days_to_resolve(issue):
+    fields = issue["fields"]
+    created = datetime.strptime(fields["created"][:19], "%Y-%m-%dT%H:%M:%S")
+    resolved = datetime.strptime(fields["resolutiondate"][:19], "%Y-%m-%dT%H:%M:%S")
+    return (resolved - created).total_seconds() / 86400
 
 
 def show(label, value, jql=None):
@@ -48,9 +57,15 @@ def main():
 
     print("\n## Labeled duplicates")
     dup_jql = "project = CBRD AND resolution = Duplicate"
-    dups = search(dup_jql, "issuelinks,comment,created,issuetype", 1000)["issues"]
+    dups = search(dup_jql, "issuelinks,comment,created,resolutiondate,issuetype", 1000)["issues"]
     show("resolution = Duplicate", len(dups), dup_jql)
     show("of which created in 2026", sum(1 for i in dups if i["fields"]["created"].startswith("2026")))
+    delays = sorted(days_to_resolve(i) for i in dups if i["fields"]["created"].startswith("2026"))
+    p75 = delays[math.ceil(0.75 * len(delays)) - 1]
+    show(
+        "2026 duplicates, days from created to resolved: median / p75 (nearest rank) / over 28 days",
+        f"{statistics.median(delays):.1f} / {p75:.1f} / {sum(d > 28 for d in delays)} of {len(delays)}",
+    )
     linked = mentioned = no_pointer = 0
     for issue in dups:
         fields = issue["fields"]

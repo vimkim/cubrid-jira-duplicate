@@ -5,6 +5,7 @@
    before the reference date: median, 90th percentile, maximum.
 2. Issues whose description contains "AI-Generated Context" among issues created
    in the 30, 90, and 180 days before the reference time, next to the totals.
+3. Issues created per month since 2025-01, with the median description length.
 
 Run from the worktree root:
     python3 -I scripts/measure_volume.py [--now "YYYY-MM-DD HH:MM"] [--refresh]
@@ -96,6 +97,24 @@ def template_share(now, refresh):
     print("- by month (template / created):", ", ".join(f"{m} {hits[m]}/{by_month[m]}" for m in sorted(by_month)))
 
 
+def monthly_profile(now, refresh):
+    """Issues created per month since 2025-01 with the median description length,
+    to show when the writing style and volume changed."""
+    jql = f'project = CBRD AND created >= "2025-01-01" AND created < "{now:%Y-%m-%d %H:%M}" ORDER BY key ASC'
+    issues = search_all(jql, "created,description", refresh)
+    months = {}
+    for i in issues:
+        months.setdefault(i["fields"]["created"][:7], []).append(i["fields"].get("description") or "")
+    print(f"\n## Issues created per month since 2025-01 (until {now:%Y-%m-%d %H:%M} +0900)")
+    print(f"- JQL: `{jql}`")
+    print("| month | created | median description chars | descriptions with \"%s\" |" % PHRASE)
+    print("|---|---|---|---|")
+    for month in sorted(months):
+        descs = months[month]
+        print(f"| {month} | {len(descs)} | {statistics.median(len(d) for d in descs):.0f} |"
+              f" {pct(sum(1 for d in descs if PHRASE in d), len(descs))} |")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--now", help='reference time "YYYY-MM-DD HH:MM" in +0900 (default: now)')
@@ -106,6 +125,7 @@ def main():
     print(f"# Volume measurements, reference time {now:%Y-%m-%d %H:%M} +0900\n")
     daily_volume(now, args.refresh)
     template_share(now, args.refresh)
+    monthly_profile(now, args.refresh)
     print(f"\n- requests: network {stats['network']}, cache {stats['cache']}")
 
 
