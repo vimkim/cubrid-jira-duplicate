@@ -1,0 +1,88 @@
+{
+  "duplicates": [
+    {
+      "key": "CBRD-100",
+      "fields": {
+        "summary": "Vacuum 오류 on partition",
+        "created": "2024-03-05T14:23:11.000+0900",
+        "issuetype": {"name": "Correct Error"},
+        "issuelinks": [
+          {
+            "type": {"name": "Duplicate", "inward": "is duplicated by", "outward": "duplicates"},
+            "outwardIssue": {"key": "CBRD-90"}
+          },
+          {
+            "type": {"name": "Relates", "inward": "relates to", "outward": "relates to"},
+            "outwardIssue": {"key": "CBRD-90"}
+          },
+          {
+            "type": {"name": "Blocks", "inward": "is blocked by", "outward": "blocks"},
+            "outwardIssue": {"key": "CBRD-80"}
+          }
+        ],
+        "comment": {
+          "total": 4,
+          "comments": [
+            {"body": "중복 이슈입니다. CBRD-90 참고. CBRD-100 자신은 제외"},
+            {"body": "see also CBRD-95"},
+            {"body": null}
+          ]
+        }
+      }
+    },
+    {
+      "key": "CBRD-200",
+      "fields": {
+        "summary": "loaddb crash",
+        "created": "2024-05-01T10:00:00.000+0900",
+        "issuetype": {"name": "Task"},
+        "issuelinks": [
+          {
+            "type": {"name": "Duplicate", "inward": "is duplicated by", "outward": "duplicates"},
+            "inwardIssue": {"key": "CBRD-150"}
+          }
+        ],
+        "comment": {"total": 1, "comments": [{"body": "dup of CBRD-9999?"}]}
+      }
+    },
+    {
+      "key": "CBRD-300",
+      "fields": {
+        "summary": "no pointer at all",
+        "created": "2024-06-01T10:00:00.000+0900",
+        "issuetype": {"name": "Task"},
+        "issuelinks": [],
+        "comment": {"total": 0, "comments": []}
+      }
+    }
+  ],
+  "candidates": [
+    {
+      "key": "CBRD-90",
+      "fields": {
+        "summary": "vacuum error on partition",
+        "created": "2024-03-01T09:00:00.000+0900",
+        "issuetype": {"name": "Correct Error"},
+        "resolution": {"name": "Fixed"}
+      }
+    },
+    {
+      "key": "CBRD-95",
+      "fields": {
+        "summary": "파티션 vacuum",
+        "created": "2024-03-06T09:00:00.000+0900",
+        "issuetype": {"name": "Task"},
+        "resolution": null
+      }
+    },
+    {
+      "key": "CBRD-150",
+      "fields": {
+        "summary": "loaddb crash on large file",
+        "created": "2024-06-01T09:00:00.000+0900",
+        "issuetype": {"name": "Correct Error"},
+        "resolution": {"name": "Duplicate"}
+      }
+    }
+  ]
+}

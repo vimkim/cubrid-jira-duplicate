@@ -1,2 +1,6 @@
 __pycache__/
 data/raw/
+.venv/
+.pytest_cache/
+.ruff_cache/
+dist/
