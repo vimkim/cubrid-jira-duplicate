@@ -43,7 +43,7 @@ def test_gold_stats_runs_offline_on_fixture_pairs(gold_pairs, tmp_path):
 def test_commands_that_need_gold_pairs_say_what_to_run(command, tmp_path):
     result = runner.invoke(app, ["measure", command, "--data-dir", str(tmp_path)])
     assert result.exit_code == 1
-    assert "cbrd-dup measure gold" in result.output
+    assert "cubrid-jira-dup measure gold" in result.output
     assert not (tmp_path / "raw").exists()
 
 

@@ -12,7 +12,7 @@ dependencies = [
 ]
 
 [project.scripts]
-cbrd-dup = "cbrd_dup.cli:app"
+cubrid-jira-dup = "cbrd_dup.cli:app"
 
 [dependency-groups]
 dev = [

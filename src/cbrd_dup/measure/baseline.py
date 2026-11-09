@@ -5,14 +5,14 @@ itself, run one anonymous search built from the duplicate's summary:
 
     project = CBRD AND text ~ "<summary words>" AND created < "<duplicate created, minute>"
 
-The JQL has no ORDER BY, so JIRA ranks by relevance (see `cbrd-dup measure probe`).
+The JQL has no ORDER BY, so JIRA ranks by relevance (see `cubrid-jira-dup measure probe`).
 Then record the rank of each earlier candidate. Two query variants run:
 
   and  the summary words as typed. JIRA 7.7 joins them with AND (the brief's baseline).
   or   the same words joined with OR. Supplementary: what JIRA's own ranking can do
        when no single field has to contain every word.
 
-Reads <data-dir>/gold-pairs.jsonl (run `cbrd-dup measure gold` first). Writes
+Reads <data-dir>/gold-pairs.jsonl (run `cubrid-jira-dup measure gold` first). Writes
 <data-dir>/baseline-results.jsonl and prints recall tables.
 """
 

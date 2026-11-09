@@ -6,19 +6,19 @@
 
 ## 재현 방법
 
-워크트리 루트에서 순서대로 실행한다. `just sync`로 `cbrd-dup`을 설치하면 그대로 쓸 수 있고, 설치하지 않았다면 명령 앞에 `uv run`을 붙인다. 모든 명령은 `--data-dir`(기본값 `./data`)을 받는다.
+워크트리 루트에서 순서대로 실행한다. `just sync`로 `cubrid-jira-dup`을 설치하면 그대로 쓸 수 있고, 설치하지 않았다면 명령 앞에 `uv run`을 붙인다. 모든 명령은 `--data-dir`(기본값 `./data`)을 받는다.
 
 | 순서 | 명령 | 하는 일 | 결과 |
 |---|---|---|---|
-| 1 | `cbrd-dup measure gold` | Duplicate로 닫힌 이슈에서 정답 쌍을 만든다 | `data/gold-pairs.jsonl`, 요약 출력 |
-| 2 | `cbrd-dup measure probe` | JIRA `text ~` 검색의 결합 방식과 정렬을 조사한다 | 출력 |
-| 3 | `cbrd-dup measure baseline` | 지금 보고자가 할 수 있는 검색으로 정답 쌍을 찾는다 | `data/baseline-results.jsonl`, 출력 |
-| 4 | `cbrd-dup measure gold-stats` | 정답 쌍의 시간 차와 언어 혼합을 계산한다(네트워크 없음) | 출력 |
-| 5 | `cbrd-dup measure volume --now "2026-11-06 17:34"` | 일별 생성 수, `AI-Generated Context` 비율, 월별 생성 수와 설명 길이를 잰다 | 출력 |
-| 6 | `cbrd-dup measure corpus` | 전체 규모, 연도별 생성 수, 중복 해결 지연, 제목과 설명의 언어를 잰다 | 출력 |
+| 1 | `cubrid-jira-dup measure gold` | Duplicate로 닫힌 이슈에서 정답 쌍을 만든다 | `data/gold-pairs.jsonl`, 요약 출력 |
+| 2 | `cubrid-jira-dup measure probe` | JIRA `text ~` 검색의 결합 방식과 정렬을 조사한다 | 출력 |
+| 3 | `cubrid-jira-dup measure baseline` | 지금 보고자가 할 수 있는 검색으로 정답 쌍을 찾는다 | `data/baseline-results.jsonl`, 출력 |
+| 4 | `cubrid-jira-dup measure gold-stats` | 정답 쌍의 시간 차와 언어 혼합을 계산한다(네트워크 없음) | 출력 |
+| 5 | `cubrid-jira-dup measure volume --now "2026-11-06 17:34"` | 일별 생성 수, `AI-Generated Context` 비율, 월별 생성 수와 설명 길이를 잰다 | 출력 |
+| 6 | `cubrid-jira-dup measure corpus` | 전체 규모, 연도별 생성 수, 중복 해결 지연, 제목과 설명의 언어를 잰다 | 출력 |
 
 - 모든 요청은 `src/cbrd_dup/jira.py`를 거친다. 요청 사이에 0.25초 이상 쉬고, 응답 원문을 `data/raw/<http:// 형태 URL의 SHA-1>.json`에 저장한다. `data/raw/`는 git이 무시한다. 같은 URL은 다음 실행 때 캐시에서 읽는다.
-- 그래서 위 명령을 다시 실행하면 이 문서의 숫자가 그대로 나온다. 2026-11-06에 캐시로 다시 실행해서 `data/*.jsonl`이 바이트 단위로 같은지 확인했다. 현재 캐시는 응답 383개, 약 28 MB다. `cbrd-dup`으로 옮긴 뒤에도 같은 캐시에서 1-5번의 출력과 `data/*.jsonl`이 같았다.
+- 그래서 위 명령을 다시 실행하면 이 문서의 숫자가 그대로 나온다. 2026-11-06에 캐시로 다시 실행해서 `data/*.jsonl`이 바이트 단위로 같은지 확인했다. 현재 캐시는 응답 383개, 약 28 MB다. `cubrid-jira-dup`으로 옮긴 뒤에도 같은 캐시에서 1-5번의 출력과 `data/*.jsonl`이 같았다.
 - 최신 값으로 다시 재려면 각 명령에 `--refresh`를 붙인다. 5번은 `--now`를 빼면 실행 시각을 기준으로 잰다.
 - JIRA에는 아무것도 쓰지 않았다. 모든 요청은 익명 GET이다.
 
@@ -43,7 +43,7 @@
 
 ## 1. 정답 쌍
 
-명령: `cbrd-dup measure gold`. 결과: `data/gold-pairs.jsonl`.
+명령: `cubrid-jira-dup measure gold`. 결과: `data/gold-pairs.jsonl`.
 
 ### 만드는 규칙
 
@@ -51,7 +51,7 @@
 - 각 중복 이슈에서 다른 이슈를 가리키는 흔적을 세 가지 출처(provenance)로 모은다.
   - `duplicate_link`: 링크 유형 `Duplicate`. 방향(`duplicates`, `is duplicated by`)은 `links`에 기록한다.
   - `relates_link`: 링크 유형 `Relates`.
-  - `comment_mention`: 댓글 본문의 `CBRD-\d+` 키. 자기 자신은 뺀다. `cbrd-dup measure corpus`와 같은 정규식이다.
+  - `comment_mention`: 댓글 본문의 `CBRD-\d+` 키. 자기 자신은 뺀다. `cubrid-jira-dup measure corpus`와 같은 정규식이다.
 - 한 쌍이 여러 출처에서 나오면 한 줄로 합친다. `provenance`에는 가장 강한 출처(`duplicate_link` > `relates_link` > `comment_mention`)를 넣고, `provenances`에는 전부 넣는다.
 - `comment_dup_cue`는 그 키를 언급한 댓글 중 하나라도 `중복` 또는 `dup`(대소문자 무시, `duplicate`도 포함)을 담고 있으면 참이다. 댓글 출처가 없는 쌍에서는 `null`이다.
 - 후보 이슈의 `summary`, `created`, 유형, 해결 상태는 `key in (...)` 검색으로 받는다(`validateQuery=false`).
@@ -90,7 +90,7 @@
 
 ### 2.1 JIRA `text ~` 검색 동작
 
-명령: `cbrd-dup measure probe`.
+명령: `cubrid-jira-dup measure probe`.
 
 측정값:
 
@@ -110,7 +110,7 @@
 
 ### 2.2 측정 방법
 
-명령: `cbrd-dup measure baseline`. 결과: `data/baseline-results.jsonl`(쌍마다 변형, JQL, 전체 결과 수, 순위, 상위 10위 포함 여부).
+명령: `cubrid-jira-dup measure baseline`. 결과: `data/baseline-results.jsonl`(쌍마다 변형, JQL, 전체 결과 수, 순위, 상위 10위 포함 여부).
 
 - 대상은 후보가 중복보다 먼저 생성된 202쌍이다. 쿼리는 중복 이슈에만 달려 있으므로 중복 이슈 160건마다 한 번씩 보낸다.
 - 쿼리 형식은 `project = CBRD AND text ~ "<요약 단어>" AND created < "<중복 created, 분 단위>"`이고 ORDER BY는 없다. `maxResults=50`으로 받아 50위까지 순위를 기록한다.
@@ -173,7 +173,7 @@
 
 ## 3. 생성 시각 차
 
-명령: `cbrd-dup measure gold-stats`. 백분위수는 nearest-rank 방식이다.
+명령: `cubrid-jira-dup measure gold-stats`. 백분위수는 nearest-rank 방식이다.
 
 ### 측정값
 
@@ -213,7 +213,7 @@
 
 ## 4. 제목 언어 혼합
 
-명령: `cbrd-dup measure gold-stats`.
+명령: `cubrid-jira-dup measure gold-stats`.
 
 ### 측정값
 
@@ -238,7 +238,7 @@
 
 ## 5. 등록 뒤 검사의 규모
 
-명령: `cbrd-dup measure volume --now "2026-11-06 17:34"`.
+명령: `cubrid-jira-dup measure volume --now "2026-11-06 17:34"`.
 
 ### 측정값
 
@@ -269,7 +269,7 @@
 
 ## 6. 에이전트 작성 비율
 
-명령: `cbrd-dup measure volume --now "2026-11-06 17:34"`.
+명령: `cubrid-jira-dup measure volume --now "2026-11-06 17:34"`.
 
 ### 사용자 확인 사항 (측정값 아님)
 

@@ -1,4 +1,4 @@
-"""The `cbrd-dup` command line."""
+"""The `cubrid-jira-dup` command line."""
 
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -48,7 +48,7 @@ def jira_session(data_dir: Path, refresh: bool) -> Iterator[tuple[JiraClient, Da
 
 def require_gold(data: DataDir) -> None:
     if not data.gold.exists():
-        typer.echo(f"error: {data.gold} not found; run `cbrd-dup measure gold` first.", err=True)
+        typer.echo(f"error: {data.gold} not found; run `cubrid-jira-dup measure gold` first.", err=True)
         raise typer.Exit(1)
 
 
