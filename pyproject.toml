@@ -5,7 +5,7 @@ description = "PoC for a CBRD duplicate-issue checker: measurements and the pack
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "bm25s>=0.3.16",
+    "fastembed>=0.7",
     "httpx>=0.28",
     "numpy>=2.5.4",
     "pydantic>=2.11",

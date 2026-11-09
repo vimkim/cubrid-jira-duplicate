@@ -11,6 +11,8 @@ from typing import Annotated
 import typer
 
 from cbrd_dup import corpus, evaluate, search
+from cbrd_dup.embed import Embedder, FastEmbedder, default_threads
+from cbrd_dup.index import Index, default_index_dir
 from cbrd_dup.jira import JiraClient, JiraError
 from cbrd_dup.measure import baseline as baseline_measure
 from cbrd_dup.measure import corpus as corpus_measure
@@ -42,8 +44,12 @@ IndexDirOption = Annotated[
     Path | None,
     typer.Option(
         "--index-dir",
-        help="Directory of the local corpus copy (default: $CUBRID_JIRA_DUP_HOME, else ~/.cache/cubrid-jira-dup).",
+        help="Directory of the local index and model (default: $CUBRID_JIRA_DUP_HOME, else ~/.cache/cubrid-jira-dup).",
     ),
+]
+ThreadsOption = Annotated[
+    int | None,
+    typer.Option("--threads", min=1, help="CPU threads for embedding (default: half the logical CPUs)."),
 ]
 RefreshOption = Annotated[bool, typer.Option("--refresh", help="Ignore cached responses and ask JIRA again.")]
 
@@ -57,6 +63,20 @@ def jira_session(data_dir: Path, refresh: bool) -> Iterator[tuple[JiraClient, Da
     except JiraError as err:
         typer.echo(f"error: {err}", err=True)
         raise typer.Exit(1) from err
+
+
+def jira_client(cache_dir: Path) -> JiraClient:
+    """The client every index sync uses; a seam for tests."""
+    return JiraClient(cache_dir, refresh=True)
+
+
+def make_embedder(index: Index, threads: int | None) -> Embedder:
+    """The model every index embedding uses; a seam for tests."""
+    return FastEmbedder(index.models, threads or default_threads())
+
+
+def progress(message: str) -> None:
+    typer.echo(message, err=True)
 
 
 def require_gold(data: DataDir) -> None:
@@ -126,15 +146,22 @@ def sync_command(
     full: Annotated[
         bool, typer.Option("--full", help="Refetch every issue and drop the ones JIRA no longer shows.")
     ] = False,
+    threads: ThreadsOption = None,
 ) -> None:
-    """Copy the CBRD issues and comments into the local index (anonymous reads)."""
-    index = corpus.IndexDir(index_dir or corpus.default_index_dir())
-    started = datetime.now(UTC)
+    """Copy the CBRD issues and comments into the local index (anonymous reads), then embed new text."""
+    index = Index(index_dir or default_index_dir())
     clock = time.perf_counter()
-    with jira_session(index.root, refresh=True) as (client, _):
-        state, fetched = corpus.sync(client, index, started, full)
+    try:
+        with jira_client(index.raw) as client:
+            state, fetched, changed = corpus.sync(client, index, datetime.now(UTC), full)
+    except JiraError as err:
+        typer.echo(f"error: {err}", err=True)
+        raise typer.Exit(1) from err
+    fetched_s = time.perf_counter() - clock
+    embedded = index.embed_pending(make_embedder(index, threads), progress)
     typer.echo(f"index: {index.root}")
-    typer.echo(f"issues: {state.issues} (fetched {fetched}) in {time.perf_counter() - clock:.1f}s")
+    typer.echo(f"issues: {state.issues} (fetched {fetched}, changed {changed}) in {fetched_s:.1f}s")
+    typer.echo(f"embedded: {embedded} texts in {time.perf_counter() - clock - fetched_s:.1f}s")
     typer.echo(f"complete: {'yes' if state.complete else 'no'}")
     for error in state.errors:
         typer.echo(f"error: {error}", err=True)
@@ -144,7 +171,11 @@ def sync_command(
 def eval_candidates_command(
     index_dir: IndexDirOption = None,
     data_dir: DataDirOption = Path("data"),
-    method: Annotated[str, typer.Option("--method", help=f"One of: {', '.join(search.METHODS)}.")] = "bm25",
+    method: Annotated[str, typer.Option("--method", help=f"One of: {', '.join(search.METHODS)}.")] = "hybrid",
+    mask: Annotated[
+        str, typer.Option("--mask", help="Hide CBRD-<n> keys only (keys) or also identifiers like cbrd_27516.")
+    ] = "identifiers",
+    threads: ThreadsOption = None,
     out: Annotated[Path | None, typer.Option("--out", help="Also write the run and its metric tables as JSON.")] = None,
 ) -> None:
     """Recall@10 and @20 of a candidate search on the gold pairs, from the local index (offline)."""
@@ -152,23 +183,31 @@ def eval_candidates_command(
         raise typer.BadParameter(
             f"unknown method {method!r}; choose from {', '.join(search.METHODS)}", param_hint="--method"
         )
-    index = corpus.IndexDir(index_dir or corpus.default_index_dir())
+    if mask not in evaluate.MASKS:
+        raise typer.BadParameter(f"unknown mask {mask!r}; choose from {', '.join(evaluate.MASKS)}", param_hint="--mask")
+    index = Index(index_dir or default_index_dir())
     data = DataDir(data_dir)
     require_gold(data)
-    if not index.issues.exists() or not index.state.exists():
-        typer.echo(f"error: no corpus in {index.root}; run `cubrid-jira-dup sync` first.", err=True)
+    if not index.exists():
+        typer.echo(f"error: no index in {index.root}; run `cubrid-jira-dup sync` first.", err=True)
         raise typer.Exit(1)
-    issues = corpus.read_issues(index)
+    chosen = search.METHODS[method]
+    embedder = make_embedder(index, threads) if chosen.dense else None
+    if embedder is not None and (index.pending() or index.model() != embedder.model_id):
+        message = f"error: {index.root} lacks {embedder.model_id} vectors; run `cubrid-jira-dup sync` first."
+        typer.echo(message, err=True)
+        raise typer.Exit(1)
+    issues = index.issues()
     by_key = {i.key: i for i in issues}
     pairs = read_jsonl(data.gold, GoldPair)
     baseline = read_jsonl(data.baseline, BaselineResult) if data.baseline.exists() else []
-    snapshot = corpus.snapshot(index)
+    snapshot = index.snapshot()
 
-    searcher = search.METHODS[method](issues)
+    searcher = search.Searcher(index, chosen, embedder)
     sides = evaluate.split(pairs)
-    run = evaluate.evaluate(searcher, evaluate.eval_queries(pairs, by_key), by_key, name=method)
-    typer.echo(evaluate.report(run, pairs, sides, baseline, snapshot))
+    queries = evaluate.eval_queries(pairs, by_key, evaluate.MASKS[mask])
+    run = evaluate.evaluate(searcher, queries, by_key, name=method)
+    typer.echo(evaluate.report(run, pairs, sides, baseline, snapshot, mask))
     if out is not None:
-        config = getattr(searcher, "config", {})
-        document = evaluate.document(run, pairs, sides, baseline, snapshot, config)
+        document = evaluate.document(run, pairs, sides, baseline, snapshot, searcher.config | {"mask": mask})
         write_text_atomic(out, json.dumps(document, ensure_ascii=False, indent=1) + "\n")

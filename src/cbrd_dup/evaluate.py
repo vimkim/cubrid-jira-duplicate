@@ -17,11 +17,12 @@ from typing import Literal, Protocol
 
 import numpy as np
 
-from cbrd_dup.corpus import Issue, Snapshot
+from cbrd_dup.corpus import Issue
+from cbrd_dup.index import Snapshot
 from cbrd_dup.jira import key_number, parse_created
 from cbrd_dup.models import BaselineResult, GoldPair
 from cbrd_dup.stats import nearest_rank, pct, wilson_interval
-from cbrd_dup.text import mask_keys
+from cbrd_dup.text import mask_key_identifiers, mask_keys
 
 Side = Literal["dev", "test"]
 SEED = 27978
@@ -30,6 +31,9 @@ RESAMPLES = 2000
 GATE = 0.8
 Ranks = dict[tuple[str, str], int | None]
 Interval = tuple[float, float]
+# How evaluation queries hide the issue they duplicate (requirements 7.2): "keys" masks CBRD-<n> only,
+# "identifiers" also masks identifiers named after an issue, such as cbrd_27516 and db25833.
+MASKS: dict[str, Callable[[str], str]] = {"identifiers": mask_key_identifiers, "keys": mask_keys}
 
 
 @dataclass(frozen=True)
@@ -68,11 +72,13 @@ def is_2026(pair: GoldPair) -> bool:
     return parse_created(pair.duplicate_created).year == 2026
 
 
-def eval_queries(pairs: list[GoldPair], issues: Mapping[str, Issue]) -> dict[str, Query]:
+def eval_queries(
+    pairs: list[GoldPair], issues: Mapping[str, Issue], mask: Callable[[str], str] = mask_key_identifiers
+) -> dict[str, Query]:
     """One query per duplicate issue with an earlier gold candidate: its masked summary and description only."""
     keys = sorted({p.duplicate for p in pairs if p.candidate_before_duplicate}, key=key_number)
     return {
-        key: Query(mask_keys(issues[key].summary), mask_keys(issues[key].description), issues[key].created, key)
+        key: Query(mask(issues[key].summary), mask(issues[key].description), issues[key].created, key)
         for key in keys
     }
 
@@ -276,6 +282,7 @@ def report(
     sides: Mapping[str, Side],
     baseline_results: list[BaselineResult],
     snapshot: Snapshot,
+    mask: str = "identifiers",
 ) -> str:
     tables = metric_rows(run, pairs, sides, baseline_results)
     counts = split_counts(pairs, sides)
@@ -284,9 +291,10 @@ def report(
         f"# Candidate recall: {run.name}",
         "",
         f"Snapshot: {snapshot.issues} issues, synced_at {snapshot.synced_at.isoformat()},"
-        f" complete {snapshot.complete}, issues.jsonl sha256 {snapshot.sha256}",
+        f" complete {snapshot.complete}, issue data sha256 {snapshot.sha256}",
         "",
         f"Pairs are the gold pairs whose candidate was created before the duplicate. Split seed {SEED}.",
+        f"Query mask: {mask} (requirements 7.2).",
         "Pairs of one query issue are not independent, so read the query bootstrap interval first.",
         "",
         "## Split",

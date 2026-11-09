@@ -1,63 +1,95 @@
 import pytest
-from factories import at, comment, issue, pair
+from factories import FakeEmbedder, at, comment, issue, pair
 
 from cbrd_dup import evaluate
-from cbrd_dup.corpus import Snapshot
 from cbrd_dup.evaluate import Query, Run
+from cbrd_dup.index import Index, Snapshot
 from cbrd_dup.models import BaselineResult
-from cbrd_dup.search import METHODS
+from cbrd_dup.search import METHODS, Searcher
 
 QUERY_TIME = at(1000)
 QUERY_KEY = "CBRD-100"
+EARLY = [comment("1", "zebra", at(100))]
+LATE = [comment("2", "giraffe", at(2000)), comment("3", "walrus", at(200), at(3000))]
 
 
-@pytest.fixture
-def corpus():
-    """CBRD-1 has an early comment, a late comment, and an early comment edited late."""
-    issues = [
-        issue(
-            "CBRD-1",
-            at(0),
-            "storage",
-            "",
-            [
-                comment("1", "zebra", at(100)),
-                comment("2", "giraffe", at(2000)),
-                comment("3", "walrus", at(200), at(3000)),
-            ],
-        ),
+def corpus_issues(late_comments=True):
+    """CBRD-1 has an early comment, and unless dropped a late comment and an early comment edited late."""
+    return [
+        issue("CBRD-1", at(0), "storage", "", EARLY + (LATE if late_comments else [])),
         issue("CBRD-5", at(10), "unrelated apples"),
         issue(QUERY_KEY, QUERY_TIME, "the query issue", "zebra giraffe walrus"),
         issue("CBRD-101", at(1001), "later", "zebra giraffe walrus"),
         issue("CBRD-102", QUERY_TIME, "same second", "zebra giraffe walrus"),
     ]
+
+
+@pytest.fixture
+def corpus():
+    issues = corpus_issues()
     return issues, {i.key: i for i in issues}
 
 
-def search_for(corpus, words, before=QUERY_TIME):
-    issues, by_key = corpus
+def searcher(path, method, issues=None):
+    index = Index(path)
+    index.apply(issues or corpus_issues(), at(5000), [], replace_all=True)
+    embedder = FakeEmbedder()
+    index.embed_pending(embedder)
+    return Searcher(index, METHODS[method], embedder if METHODS[method].dense else None)
+
+
+def search_for(tmp_path, words, before=QUERY_TIME, method="bm25"):
+    issues = corpus_issues()
     query = Query(words, "", before, QUERY_KEY)
-    return evaluate.evaluate(METHODS["bm25"](issues), {QUERY_KEY: query}, by_key).ranked[QUERY_KEY]
+    run = evaluate.evaluate(searcher(tmp_path, method), {QUERY_KEY: query}, {i.key: i for i in issues})
+    return run.ranked[QUERY_KEY]
 
 
-def test_words_in_an_early_comment_find_the_candidate(corpus):
-    assert search_for(corpus, "zebra") == ["CBRD-1"]
+def test_words_in_an_early_comment_find_the_candidate(tmp_path):
+    assert search_for(tmp_path, "zebra") == ["CBRD-1"]
 
 
 @pytest.mark.parametrize("words", ["giraffe", "walrus", "giraffe walrus"])
-def test_words_only_in_a_late_or_late_edited_comment_do_not(corpus, words):
-    assert search_for(corpus, words) == []
+def test_words_only_in_a_late_or_late_edited_comment_do_not(tmp_path, words):
+    assert search_for(tmp_path, words) == []
 
 
-def test_the_cutoff_is_what_hides_them(corpus):
-    found = search_for(corpus, "walrus", before=None)
+def test_the_cutoff_is_what_hides_them(tmp_path):
+    found = search_for(tmp_path, "walrus", before=None)
     assert "CBRD-1" in found
     assert QUERY_KEY not in found
 
 
-def test_later_and_same_second_issues_are_never_returned(corpus):
-    found = search_for(corpus, "zebra giraffe walrus the query issue later same second")
+@pytest.mark.parametrize("method", ["bm25", "hybrid"])
+def test_later_and_same_second_issues_are_never_returned(tmp_path, method):
+    found = search_for(tmp_path, "zebra giraffe walrus the query issue later same second", method=method)
     assert not {"CBRD-101", "CBRD-102", QUERY_KEY} & set(found)
+
+
+@pytest.mark.parametrize("words", ["giraffe", "walrus", "zebra giraffe walrus storage"])
+def test_hybrid_ranks_as_if_late_comments_did_not_exist(tmp_path, words):
+    query = Query(words, "giraffe walrus", QUERY_TIME, QUERY_KEY)
+    with_late = searcher(tmp_path / "a", "hybrid").rank(query, 20)
+    without = searcher(tmp_path / "b", "hybrid", corpus_issues(late_comments=False)).rank(query, 20)
+    assert with_late.keys == without.keys
+    assert with_late.channel_ranks == without.channel_ranks
+    assert set(with_late.keys) <= {"CBRD-1", "CBRD-5"}
+
+
+STACK = "crash\n#0 0x7f in raise () from libc\n#1 0x0 in lock_get_new_entry (a=1) at lock.c:10\n#2 lock_object ()"
+
+
+def test_the_stack_channel_matches_the_top_frames_and_only_runs_for_a_stack(tmp_path):
+    issues = corpus_issues() + [issue("CBRD-7", at(20), "hang", "seen in lock_get_new_entry and lock_object")]
+    found = searcher(tmp_path, "hybrid", issues)
+    assert found.rank(Query("core dump", STACK, QUERY_TIME, QUERY_KEY), 20).channel_ranks["S"] == {"CBRD-7": 1}
+    assert "S" not in found.rank(Query("core dump", "no stack here", QUERY_TIME, QUERY_KEY), 20).channel_ranks
+
+
+def test_recency_puts_the_newer_of_two_equal_issues_first(tmp_path):
+    issues = [issue("CBRD-1", at(-100 * 86400), "same words"), issue("CBRD-2", at(500), "same words")]
+    ranked = searcher(tmp_path, "hybrid", issues).rank(Query("same words", "", QUERY_TIME, None), 20)
+    assert ranked.keys == ["CBRD-2", "CBRD-1"]
 
 
 class Fixed:
@@ -104,12 +136,24 @@ def test_eval_queries_use_only_the_masked_summary_and_description_of_earlier_pai
     )
     by_key = by_key | {dup.key: dup, "CBRD-300": issue("CBRD-300", at(700))}
     pairs = [pair("CBRD-200", "CBRD-5"), pair("CBRD-300", "CBRD-1", candidate_before_duplicate=False)]
-    queries = evaluate.eval_queries(pairs, by_key)
+    queries = evaluate.eval_queries(pairs, by_key, evaluate.MASKS["keys"])
     assert list(queries) == ["CBRD-200"]
     query = queries["CBRD-200"]
     assert "CBRD-" not in query.title + query.body
     assert "secret" not in query.title + query.body
     assert (query.before, query.exclude) == (at(500), "CBRD-200")
+
+
+def test_eval_queries_mask_identifiers_named_after_an_issue_by_default(corpus):
+    _, by_key = corpus
+    dup = issue("CBRD-200", at(500), "loaddb fails on cbrd_27516", "run on db25833 and CBRD27516, see CBRD-5")
+    pairs = [pair("CBRD-200", "CBRD-5")]
+    strict = evaluate.eval_queries(pairs, by_key | {dup.key: dup})["CBRD-200"]
+    assert "27516" not in strict.title + strict.body
+    assert "25833" not in strict.body
+    assert strict.title.startswith("loaddb fails on")
+    keys_only = evaluate.eval_queries(pairs, by_key | {dup.key: dup}, evaluate.MASKS["keys"])["CBRD-200"]
+    assert "cbrd_27516" in keys_only.title
 
 
 def synthetic_pairs():

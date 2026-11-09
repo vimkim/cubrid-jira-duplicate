@@ -1,12 +1,12 @@
 import json
 
 import pytest
-from factories import at, comment, issue, pair
+from factories import FakeEmbedder, at, comment, issue, pair
 from typer.testing import CliRunner
 
-from cbrd_dup import corpus
+from cbrd_dup import cli
 from cbrd_dup.cli import app
-from cbrd_dup.corpus import IndexDir, SyncState
+from cbrd_dup.index import Index
 from cbrd_dup.jira import cache_key, search_url
 from cbrd_dup.measure import gold
 from cbrd_dup.store import DataDir, write_jsonl
@@ -80,24 +80,49 @@ def test_sync_and_eval_candidates_document_the_index_dir(args):
     assert "--index-dir" in result.output
 
 
-def test_eval_candidates_runs_offline_from_an_index_and_writes_json(tmp_path):
-    index = IndexDir(tmp_path / "index")
+@pytest.fixture
+def embedder(monkeypatch):
+    fake = FakeEmbedder()
+    monkeypatch.setattr(cli, "make_embedder", lambda index, threads: fake)
+    return fake
+
+
+def build_index(path, issues, embedder):
+    index = Index(path)
+    index.apply(issues, at(200), [], replace_all=True)
+    index.embed_pending(embedder)
+    embedder.calls.clear()
+    return index
+
+
+@pytest.mark.parametrize(("method", "found"), [("bm25", ["CBRD-1"]), ("hybrid", ["CBRD-1", "CBRD-2"])])
+def test_eval_candidates_runs_offline_from_an_index_and_writes_json(tmp_path, embedder, method, found):
     issues = [
         issue("CBRD-1", at(0), "heap vacuum crash", "", [comment("1", "zebra", at(5))]),
+        issue("CBRD-2", at(1), "apples", ""),
         issue("CBRD-9", at(100), "heap vacuum crash again", "see CBRD-1"),
     ]
-    corpus.write_issues(index, issues)
-    corpus.write_state(index, SyncState(synced_at=at(200), complete=True, issues=2, errors=[]))
+    index = build_index(tmp_path / "index", issues, embedder)
     write_jsonl(DataDir(tmp_path / "data").gold, [pair("CBRD-9", "CBRD-1", "2024-03-05T14:24:51.000+0900")])
     out = tmp_path / "eval.json"
     args = ["eval", "candidates", "--index-dir", str(index.root), "--data-dir", str(tmp_path / "data")]
-    result = runner.invoke(app, [*args, "--out", str(out)])
+    result = runner.invoke(app, [*args, "--method", method, "--out", str(out)])
     assert result.exit_code == 0, result.output
     assert "## Test split (the gate)" in result.output
+    assert "Query mask: identifiers" in result.output
     document = json.loads(out.read_text(encoding="utf-8"))
-    assert document["queries"]["CBRD-9"]["ranked"] == ["CBRD-1"]
-    assert document["method"] == "bm25"
+    assert document["queries"]["CBRD-9"]["ranked"] == found
+    assert document["method"] == method
     assert document["split"]["seed"] == 27978
+
+
+def test_eval_candidates_refuses_an_index_without_vectors(tmp_path, embedder):
+    Index(tmp_path / "index").apply([issue("CBRD-1", at(0), "x")], at(200), [], replace_all=True)
+    write_jsonl(DataDir(tmp_path).gold, [])
+    args = ["eval", "candidates", "--index-dir", str(tmp_path / "index"), "--data-dir", str(tmp_path)]
+    result = runner.invoke(app, args)
+    assert result.exit_code == 1
+    assert "run `cubrid-jira-dup sync`" in result.output
 
 
 def test_eval_candidates_without_an_index_says_to_sync(tmp_path):
@@ -112,3 +137,4 @@ def test_eval_candidates_without_an_index_says_to_sync(tmp_path):
 def test_eval_candidates_rejects_an_unknown_method(tmp_path):
     result = runner.invoke(app, ["eval", "candidates", "--method", "nope", "--index-dir", str(tmp_path)])
     assert result.exit_code == 2
+

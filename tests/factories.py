@@ -1,8 +1,13 @@
+import hashlib
 from datetime import datetime, timedelta
 
+import numpy as np
+
 from cbrd_dup.corpus import Comment, Issue
+from cbrd_dup.embed import DIM
 from cbrd_dup.jira import parse_created
 from cbrd_dup.models import GoldPair
+from cbrd_dup.text import tokenize
 
 T0 = parse_created("2024-03-05T14:23:11.000+0900")
 
@@ -71,3 +76,24 @@ def pair(duplicate: str, candidate: str, created: str = "2025-05-01T10:00:00.000
         "candidate_summary": "c",
     } | fields
     return GoldPair(**values)
+
+
+class FakeEmbedder:
+    """Hashes each token to one dimension, so texts that share words point the same way. Records every call."""
+
+    model_id = "fake-hash"
+
+    def __init__(self):
+        self.calls: list[list[str]] = []
+
+    def embed(self, texts):
+        self.calls.append(list(texts))
+        vectors = np.full((len(texts), DIM), 1e-3, np.float32)
+        for row, text in enumerate(texts):
+            for token in tokenize(text.split(": ", 1)[1]):
+                vectors[row, int(hashlib.md5(token.encode()).hexdigest(), 16) % (DIM - 1) + 1] += 1
+        return vectors / np.linalg.norm(vectors, axis=1, keepdims=True)
+
+    @property
+    def texts(self) -> list[str]:
+        return [text for call in self.calls for text in call]
