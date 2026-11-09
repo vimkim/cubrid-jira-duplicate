@@ -1,6 +1,7 @@
 """The `cubrid-jira-dup` command line."""
 
 import json
+import sys
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -10,7 +11,7 @@ from typing import Annotated
 
 import typer
 
-from cbrd_dup import corpus, evaluate, search
+from cbrd_dup import corpus, evaluate, find, search
 from cbrd_dup.embed import Embedder, FastEmbedder, default_threads
 from cbrd_dup.index import Index, default_index_dir
 from cbrd_dup.jira import JiraClient, JiraError
@@ -165,6 +166,52 @@ def sync_command(
     typer.echo(f"complete: {'yes' if state.complete else 'no'}")
     for error in state.errors:
         typer.echo(f"error: {error}", err=True)
+
+
+@app.command("candidate-find")
+def candidate_find_command(
+    source: Annotated[
+        str | None, typer.Argument(help="A Markdown draft (first `# ` line is the title) or an issue key, CBRD-12345.")
+    ] = None,
+    title: Annotated[str | None, typer.Option("--title", help="The title; the body is read from stdin.")] = None,
+    k: Annotated[int, typer.Option("-k", min=1, max=50, help="How many candidates to return.")] = 20,
+    as_json: Annotated[bool, typer.Option("--json", help="Write one JSON document to stdout.")] = False,
+    no_sync: Annotated[bool, typer.Option("--no-sync", help="Search the index as it is, without asking JIRA.")] = False,
+    threads: ThreadsOption = None,
+    index_dir: IndexDirOption = None,
+) -> None:
+    """Suggest existing CBRD issues that a draft or an issue may duplicate. It suggests; it does not decide.
+
+    Exit 0 when the sync and the search complete, even with no candidates. Exit 2 on bad input or a failed sync.
+    """
+    index = Index(index_dir or default_index_dir())
+
+    def sync() -> corpus.SyncResult:
+        with jira_client(index.raw) as client:
+            return corpus.sync(client, index, datetime.now(UTC))
+
+    try:
+        query = find.parse_source(source, title, sys.stdin.read)
+        document = find.find(
+            index,
+            query,
+            k,
+            sync=None if no_sync else sync,
+            embedder=lambda: make_embedder(index, threads),
+            clock=lambda: datetime.now().astimezone(),
+            progress=progress,
+        )
+    except find.InputError as err:
+        typer.echo(f"error: {err}", err=True)
+        raise typer.Exit(2) from err
+    if as_json:
+        typer.echo(json.dumps(document, ensure_ascii=False, indent=1))
+    else:
+        typer.echo(find.text_report(document), nl=False)
+    for error in document["errors"]:
+        typer.echo(f"error: {error}", err=True)
+    if not document["complete"]:
+        raise typer.Exit(2)
 
 
 @eval_app.command("candidates")

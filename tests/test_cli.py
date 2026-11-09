@@ -1,13 +1,14 @@
 import json
 
+import httpx
 import pytest
-from factories import FakeEmbedder, at, comment, issue, pair
+from factories import FakeEmbedder, at, comment, issue, pair, raw_issue
 from typer.testing import CliRunner
 
 from cbrd_dup import cli
 from cbrd_dup.cli import app
 from cbrd_dup.index import Index
-from cbrd_dup.jira import cache_key, search_url
+from cbrd_dup.jira import JiraClient, cache_key, search_url
 from cbrd_dup.measure import gold
 from cbrd_dup.store import DataDir, write_jsonl
 
@@ -73,7 +74,7 @@ def test_gold_runs_from_the_cache_with_zero_network_requests(gold_issues, tmp_pa
     assert (tmp_path / "gold-pairs.jsonl").read_text(encoding="utf-8").count("\n") == 4
 
 
-@pytest.mark.parametrize("args", [["sync"], ["eval", "candidates"]])
+@pytest.mark.parametrize("args", [["sync"], ["eval", "candidates"], ["candidate-find"]])
 def test_sync_and_eval_candidates_document_the_index_dir(args):
     result = runner.invoke(app, [*args, "--help"])
     assert result.exit_code == 0
@@ -138,3 +139,159 @@ def test_eval_candidates_rejects_an_unknown_method(tmp_path):
     result = runner.invoke(app, ["eval", "candidates", "--method", "nope", "--index-dir", str(tmp_path)])
     assert result.exit_code == 2
 
+
+ISSUES = [
+    issue("CBRD-1", at(0), "heap_update crash in vacuum", "ER_HEAP_UNKNOWN_OBJECT in heap_file.c", [
+        comment("1", "heap_update again", at(5))
+    ]),
+    issue("CBRD-2", at(10), "loaddb is slow", "loaddb takes an hour"),
+    issue("CBRD-3", at(20), "vacuum heap crash", "core dump in heap_update with -1114"),
+    issue("CBRD-4", at(30), "csql help typo", "typo in csql --help"),
+]
+CANDIDATE_FIELDS = {"rank", "key", "url", "summary", "issuetype", "status", "resolution", "created", "signals"}
+SIGNALS = {"lexical_rank", "semantic_rank", "title_rank", "stack_rank", "created_days_before"}
+SIGNALS |= {"shared_identifiers", "shared_error_codes"}
+
+
+@pytest.fixture
+def index(tmp_path, embedder):
+    return build_index(tmp_path / "index", ISSUES, embedder)
+
+
+def find(index, *args, input=None):
+    return runner.invoke(app, ["candidate-find", *args, "--index-dir", str(index.root)], input=input)
+
+
+def test_a_draft_file_gives_one_json_document_on_stdout(index, tmp_path):
+    draft = tmp_path / "draft.md"
+    draft.write_text("intro line\n# Crash in heap_update during vacuum\n\nER_HEAP_UNKNOWN_OBJECT, -1114\n")
+    result = find(index, str(draft), "--no-sync", "--json", "-k", "3")
+    assert result.exit_code == 0, result.stderr
+    document = json.loads(result.stdout)
+    assert document["schema"] == "cubrid-jira-dup/candidates/1"
+    assert document["query"] == {"source": "draft", "key": None, "title": "Crash in heap_update during vacuum"}
+    assert (document["k"], document["complete"], document["errors"]) == (3, True, [])
+    assert document["index"]["issues"] == 4
+    assert set(document["timings_ms"]) == {"sync", "load", "embed", "search", "total"}
+    assert document["method"]["name"] == "hybrid"
+    assert document["method"]["config"]["weights"] == {"L": 2, "D": 1, "T": 1, "TD": 1, "S": 4}
+    candidates = document["candidates"]
+    assert [c["rank"] for c in candidates] == [1, 2, 3]
+    assert {c["key"] for c in candidates[:2]} == {"CBRD-1", "CBRD-3"}
+    assert all(set(c) == CANDIDATE_FIELDS and set(c["signals"]) == SIGNALS for c in candidates)
+    first = next(c for c in candidates if c["key"] == "CBRD-1")
+    assert first["url"] == "https://jira.cubrid.org/browse/CBRD-1"
+    assert first["signals"]["shared_identifiers"] == ["heap_update", "ER_HEAP_UNKNOWN_OBJECT"]
+    assert first["signals"]["shared_error_codes"] == ["ER_HEAP_UNKNOWN_OBJECT"]
+    assert first["signals"]["stack_rank"] is None
+    assert first["signals"]["created_days_before"] > 900
+
+
+def test_a_title_with_the_body_on_stdin(index):
+    result = find(index, "--title", "loaddb is slow", "--no-sync", "--json", input="it takes an hour")
+    assert result.exit_code == 0, result.stderr
+    document = json.loads(result.stdout)
+    assert document["query"]["source"] == "title"
+    assert document["candidates"][0]["key"] == "CBRD-2"
+
+
+def test_an_issue_key_in_any_case_searches_with_its_text_and_excludes_itself(index):
+    result = find(index, "cbrd-3", "--no-sync", "--json")
+    assert result.exit_code == 0, result.stderr
+    document = json.loads(result.stdout)
+    assert document["query"] == {"source": "key", "key": "CBRD-3", "title": "vacuum heap crash"}
+    keys = [c["key"] for c in document["candidates"]]
+    assert "CBRD-3" not in keys
+    assert keys[0] == "CBRD-1"
+
+
+def test_text_output_lists_the_keys_in_rank_order(index):
+    as_json = json.loads(find(index, "CBRD-3", "--no-sync", "--json").stdout)
+    result = find(index, "CBRD-3", "--no-sync")
+    assert result.exit_code == 0
+    listed = [line.split()[1] for line in result.stdout.splitlines() if line[:1].isdigit()]
+    assert listed == [c["key"] for c in as_json["candidates"]]
+    assert "https://jira.cubrid.org/browse/CBRD-1" in result.stdout
+    assert "signals: lexical" in result.stdout
+
+
+@pytest.mark.parametrize(
+    ("args", "message"),
+    [
+        ([], "exactly one input"),
+        (["CBRD-1", "--title", "t"], "exactly one input"),
+        (["--title", "   "], "title is empty"),
+        (["CBRD-404"], "not in the index"),
+        (["no-such-draft.md"], "neither an issue key"),
+        (["CBRD-1", "-k", "0"], "-k"),
+        (["CBRD-1", "-k", "51"], "-k"),
+    ],
+)
+def test_bad_input_exits_2_with_a_message_and_no_search(index, embedder, args, message):
+    result = find(index, *args, "--no-sync", "--json", input="")
+    assert result.exit_code == 2
+    assert message in result.stderr
+    assert result.stdout == ""
+    assert embedder.calls == []
+
+
+def test_a_draft_without_a_title_line_is_refused(index, tmp_path):
+    draft = tmp_path / "draft.md"
+    draft.write_text("no heading here\n")
+    result = find(index, str(draft), "--no-sync")
+    assert result.exit_code == 2
+    assert "no `# ` title line" in result.stderr
+
+
+def test_no_index_and_no_sync_exits_2(tmp_path, embedder):
+    result = runner.invoke(app, ["candidate-find", "CBRD-1", "--no-sync", "--index-dir", str(tmp_path / "none")])
+    assert result.exit_code == 2
+    assert "cubrid-jira-dup sync" in result.stderr
+
+
+def use_jira(monkeypatch, handler):
+    requests = []
+
+    def record(request):
+        requests.append(request)
+        return handler(request)
+
+    def client(cache_dir):
+        return JiraClient(cache_dir, refresh=True, min_interval=0, transport=httpx.MockTransport(record))
+
+    monkeypatch.setattr(cli, "jira_client", client)
+    return requests
+
+
+def test_a_sync_runs_first_and_a_complete_search_exits_0(index, monkeypatch):
+    page = {"total": 1, "issues": [raw_issue("CBRD-5", at(40), summary="loaddb hangs")]}
+    requests = use_jira(monkeypatch, lambda request: httpx.Response(200, json=page))
+    result = find(index, "--title", "loaddb", "--json", input="")
+    assert result.exit_code == 0, result.stderr
+    document = json.loads(result.stdout)
+    assert document["complete"]
+    assert document["index"]["issues"] == 5
+    assert "CBRD-5" in [c["key"] for c in document["candidates"]]
+    assert "updated >=" in requests[0].url.params["jql"]
+
+
+def test_a_failed_sync_searches_the_existing_index_and_exits_2(index, monkeypatch):
+    use_jira(monkeypatch, lambda request: httpx.Response(403, json={}))
+    result = find(index, "CBRD-3", "--json")
+    assert result.exit_code == 2
+    document = json.loads(result.stdout)
+    assert not document["complete"]
+    assert "sync failed" in document["errors"][0]
+    assert document["candidates"][0]["key"] == "CBRD-1"
+    assert document["index"]["last_sync_attempt"] is not None
+    assert "sync failed" in result.stderr
+
+
+def test_the_first_run_builds_the_index_and_embeds_it(tmp_path, embedder, monkeypatch):
+    page = {"total": 2, "issues": [raw_issue("CBRD-1", at(0), summary="heap"), raw_issue("CBRD-2", at(1))]}
+    use_jira(monkeypatch, lambda request: httpx.Response(200, json=page))
+    result = runner.invoke(app, ["candidate-find", "--title", "heap", "--index-dir", str(tmp_path / "new")], input="")
+    assert result.exit_code == 0, result.stderr
+    assert "first run" in result.stderr
+    assert "embedded 4/4" in result.stderr
+    assert Index(tmp_path / "new").pending() == 0
