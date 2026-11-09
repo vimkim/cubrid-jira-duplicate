@@ -1,13 +1,16 @@
 """The `cubrid-jira-dup` command line."""
 
+import json
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
 
 import typer
 
+from cbrd_dup import corpus, evaluate, search
 from cbrd_dup.jira import JiraClient, JiraError
 from cbrd_dup.measure import baseline as baseline_measure
 from cbrd_dup.measure import corpus as corpus_measure
@@ -15,7 +18,8 @@ from cbrd_dup.measure import gold as gold_measure
 from cbrd_dup.measure import gold_stats as gold_stats_measure
 from cbrd_dup.measure import probe as probe_measure
 from cbrd_dup.measure import volume as volume_measure
-from cbrd_dup.store import DataDir
+from cbrd_dup.models import BaselineResult, GoldPair
+from cbrd_dup.store import DataDir, read_jsonl, write_text_atomic
 
 app = typer.Typer(
     add_completion=False,
@@ -27,10 +31,19 @@ measure = typer.Typer(
     help="Reproduce the measurements behind docs/evidence.md. All reads are anonymous and cached.",
 )
 app.add_typer(measure, name="measure")
+eval_app = typer.Typer(no_args_is_help=True, help="Measure search methods offline against the gold pairs.")
+app.add_typer(eval_app, name="eval")
 
 DataDirOption = Annotated[
     Path,
     typer.Option("--data-dir", help="Directory holding the JSONL files and the raw response cache (raw/)."),
+]
+IndexDirOption = Annotated[
+    Path | None,
+    typer.Option(
+        "--index-dir",
+        help="Directory of the local corpus copy (default: $CUBRID_JIRA_DUP_HOME, else ~/.cache/cubrid-jira-dup).",
+    ),
 ]
 RefreshOption = Annotated[bool, typer.Option("--refresh", help="Ignore cached responses and ask JIRA again.")]
 
@@ -105,3 +118,57 @@ def volume_command(
     """Issues per day, the AI-Generated Context template share, and issues per month."""
     with jira_session(data_dir, refresh) as (client, _):
         volume_measure.run(client, now or volume_measure.current_minute())
+
+
+@app.command("sync")
+def sync_command(
+    index_dir: IndexDirOption = None,
+    full: Annotated[
+        bool, typer.Option("--full", help="Refetch every issue and drop the ones JIRA no longer shows.")
+    ] = False,
+) -> None:
+    """Copy the CBRD issues and comments into the local index (anonymous reads)."""
+    index = corpus.IndexDir(index_dir or corpus.default_index_dir())
+    started = datetime.now(UTC)
+    clock = time.perf_counter()
+    with jira_session(index.root, refresh=True) as (client, _):
+        state, fetched = corpus.sync(client, index, started, full)
+    typer.echo(f"index: {index.root}")
+    typer.echo(f"issues: {state.issues} (fetched {fetched}) in {time.perf_counter() - clock:.1f}s")
+    typer.echo(f"complete: {'yes' if state.complete else 'no'}")
+    for error in state.errors:
+        typer.echo(f"error: {error}", err=True)
+
+
+@eval_app.command("candidates")
+def eval_candidates_command(
+    index_dir: IndexDirOption = None,
+    data_dir: DataDirOption = Path("data"),
+    method: Annotated[str, typer.Option("--method", help=f"One of: {', '.join(search.METHODS)}.")] = "bm25",
+    out: Annotated[Path | None, typer.Option("--out", help="Also write the run and its metric tables as JSON.")] = None,
+) -> None:
+    """Recall@10 and @20 of a candidate search on the gold pairs, from the local index (offline)."""
+    if method not in search.METHODS:
+        raise typer.BadParameter(
+            f"unknown method {method!r}; choose from {', '.join(search.METHODS)}", param_hint="--method"
+        )
+    index = corpus.IndexDir(index_dir or corpus.default_index_dir())
+    data = DataDir(data_dir)
+    require_gold(data)
+    if not index.issues.exists() or not index.state.exists():
+        typer.echo(f"error: no corpus in {index.root}; run `cubrid-jira-dup sync` first.", err=True)
+        raise typer.Exit(1)
+    issues = corpus.read_issues(index)
+    by_key = {i.key: i for i in issues}
+    pairs = read_jsonl(data.gold, GoldPair)
+    baseline = read_jsonl(data.baseline, BaselineResult) if data.baseline.exists() else []
+    snapshot = corpus.snapshot(index)
+
+    searcher = search.METHODS[method](issues)
+    sides = evaluate.split(pairs)
+    run = evaluate.evaluate(searcher, evaluate.eval_queries(pairs, by_key), by_key, name=method)
+    typer.echo(evaluate.report(run, pairs, sides, baseline, snapshot))
+    if out is not None:
+        config = getattr(searcher, "config", {})
+        document = evaluate.document(run, pairs, sides, baseline, snapshot, config)
+        write_text_atomic(out, json.dumps(document, ensure_ascii=False, indent=1) + "\n")

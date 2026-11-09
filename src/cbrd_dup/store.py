@@ -33,6 +33,14 @@ def show(path: Path) -> str:
         return str(path)
 
 
+def write_text_atomic(path: Path, text: str) -> None:
+    """Write through a temporary file and rename, so a reader never sees half a file."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    partial = path.with_name(path.name + ".tmp")
+    partial.write_text(text, encoding="utf-8")
+    partial.replace(path)
+
+
 def read_jsonl[T: BaseModel](path: Path, model: type[T]) -> list[T]:
     with path.open(encoding="utf-8") as fh:
         return [model.model_validate_json(line) for line in fh if line.strip()]

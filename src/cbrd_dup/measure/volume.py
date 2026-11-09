@@ -12,12 +12,11 @@ responses in <data-dir>/raw/ and prints the same numbers.
 
 import statistics
 from collections import Counter
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
-from cbrd_dup.jira import JiraClient, parse_created
+from cbrd_dup.jira import KST, JiraClient, parse_created
 from cbrd_dup.stats import nearest_rank, pct
 
-KST = timezone(timedelta(hours=9))
 PHRASE = "AI-Generated Context"
 
 

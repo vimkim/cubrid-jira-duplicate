@@ -1,9 +1,12 @@
 import json
 
 import pytest
+from factories import at, comment, issue, pair
 from typer.testing import CliRunner
 
+from cbrd_dup import corpus
 from cbrd_dup.cli import app
+from cbrd_dup.corpus import IndexDir, SyncState
 from cbrd_dup.jira import cache_key, search_url
 from cbrd_dup.measure import gold
 from cbrd_dup.store import DataDir, write_jsonl
@@ -68,3 +71,44 @@ def test_gold_runs_from_the_cache_with_zero_network_requests(gold_issues, tmp_pa
     assert result.exit_code == 0, result.output
     assert "- requests: network 0, cache 2" in result.output
     assert (tmp_path / "gold-pairs.jsonl").read_text(encoding="utf-8").count("\n") == 4
+
+
+@pytest.mark.parametrize("args", [["sync"], ["eval", "candidates"]])
+def test_sync_and_eval_candidates_document_the_index_dir(args):
+    result = runner.invoke(app, [*args, "--help"])
+    assert result.exit_code == 0
+    assert "--index-dir" in result.output
+
+
+def test_eval_candidates_runs_offline_from_an_index_and_writes_json(tmp_path):
+    index = IndexDir(tmp_path / "index")
+    issues = [
+        issue("CBRD-1", at(0), "heap vacuum crash", "", [comment("1", "zebra", at(5))]),
+        issue("CBRD-9", at(100), "heap vacuum crash again", "see CBRD-1"),
+    ]
+    corpus.write_issues(index, issues)
+    corpus.write_state(index, SyncState(synced_at=at(200), complete=True, issues=2, errors=[]))
+    write_jsonl(DataDir(tmp_path / "data").gold, [pair("CBRD-9", "CBRD-1", "2024-03-05T14:24:51.000+0900")])
+    out = tmp_path / "eval.json"
+    args = ["eval", "candidates", "--index-dir", str(index.root), "--data-dir", str(tmp_path / "data")]
+    result = runner.invoke(app, [*args, "--out", str(out)])
+    assert result.exit_code == 0, result.output
+    assert "## Test split (the gate)" in result.output
+    document = json.loads(out.read_text(encoding="utf-8"))
+    assert document["queries"]["CBRD-9"]["ranked"] == ["CBRD-1"]
+    assert document["method"] == "bm25"
+    assert document["split"]["seed"] == 27978
+
+
+def test_eval_candidates_without_an_index_says_to_sync(tmp_path):
+    write_jsonl(DataDir(tmp_path).gold, [])
+    result = runner.invoke(
+        app, ["eval", "candidates", "--index-dir", str(tmp_path / "none"), "--data-dir", str(tmp_path)]
+    )
+    assert result.exit_code == 1
+    assert "cubrid-jira-dup sync" in result.output
+
+
+def test_eval_candidates_rejects_an_unknown_method(tmp_path):
+    result = runner.invoke(app, ["eval", "candidates", "--method", "nope", "--index-dir", str(tmp_path)])
+    assert result.exit_code == 2

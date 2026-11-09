@@ -10,7 +10,7 @@ import hashlib
 import json
 import time
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 from typing import NamedTuple, Self
 from urllib.parse import urlencode
@@ -22,6 +22,7 @@ BASE = "https://jira.cubrid.org/rest/api/2/search"
 MIN_INTERVAL = 0.25
 TIMEOUT = 120.0
 ATTEMPTS = 4
+KST = timezone(timedelta(hours=9))
 
 
 class JiraError(RuntimeError):
@@ -113,12 +114,16 @@ class JiraClient:
 
     def search_all(self, jql: str, fields: str, page: int = 1000, **params) -> list[dict]:
         """Fetch every issue matching jql. Add a stable ORDER BY to jql yourself."""
+        return self.search_all_counted(jql, fields, page, **params)[0]
+
+    def search_all_counted(self, jql: str, fields: str, page: int = 1000, **params) -> tuple[list[dict], int]:
+        """Like `search_all`, also returning the `total` JIRA reported on the last page."""
         issues: list[dict] = []
         while True:
             body = self.search(jql, fields, page, len(issues), **params).require_ok()
             issues.extend(body["issues"])
             if not body["issues"] or len(issues) >= body["total"]:
-                return issues
+                return issues, body["total"]
 
     def _fetch(self, url: str) -> Reply:
         retrying = Retrying(
