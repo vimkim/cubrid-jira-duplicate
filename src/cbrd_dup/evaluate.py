@@ -1,10 +1,3 @@
-"""Measure candidate recall on the gold pairs without leaking information from after the query.
-
-A `Searcher` ranks issue keys for a `Query`. `evaluate` runs one query per duplicate issue that has an
-earlier gold candidate and checks that the cutoff held; `report` turns the ranks into the tables of
-docs/requirements.md 7.4. The searchers themselves live elsewhere, so a script can run an outside
-engine through the same harness.
-"""
 
 import random
 import statistics
@@ -31,8 +24,6 @@ RESAMPLES = 2000
 GATE = 0.8
 Ranks = dict[tuple[str, str], int | None]
 Interval = tuple[float, float]
-# How evaluation queries hide the issue they duplicate (requirements 7.2): "keys" masks CBRD-<n> only,
-# "identifiers" also masks identifiers named after an issue, such as cbrd_27516 and db25833.
 MASKS: dict[str, Callable[[str], str]] = {"identifiers": mask_key_identifiers, "keys": mask_keys}
 
 
@@ -75,7 +66,6 @@ def is_2026(pair: GoldPair) -> bool:
 def eval_queries(
     pairs: list[GoldPair], issues: Mapping[str, Issue], mask: Callable[[str], str] = mask_key_identifiers
 ) -> dict[str, Query]:
-    """One query per duplicate issue with an earlier gold candidate: its masked summary and description only."""
     keys = sorted({p.duplicate for p in pairs if p.candidate_before_duplicate}, key=key_number)
     return {
         key: Query(mask(issues[key].summary), mask(issues[key].description), issues[key].created, key)
@@ -84,7 +74,6 @@ def eval_queries(
 
 
 def split(pairs: list[GoldPair], seed: int = SEED) -> dict[str, Side]:
-    """Assign each query issue to dev or test; pairs linked through a shared issue stay on one side."""
     earlier = [p for p in pairs if p.candidate_before_duplicate]
     parent: dict[str, str] = {}
 
@@ -135,7 +124,6 @@ def evaluate(
 
 
 def check_cutoff(key: str, query: Query, returned: list[str], issues: Mapping[str, Issue]) -> None:
-    """Raise when a searcher returned the query itself, an unknown or repeated key, or an issue created after it."""
     seen: set[str] = set()
     for found in returned:
         if found in (key, query.exclude):
@@ -179,7 +167,6 @@ def hit(rank: int | None, k: int) -> bool:
 
 
 def bootstrap_interval(per_query: list[tuple[int, int]]) -> Interval:
-    """95% interval of the pooled recall when query issues are resampled with replacement."""
     found = np.array([f for f, _ in per_query])
     total = np.array([n for _, n in per_query])
     picks = np.random.default_rng(SEED).integers(0, len(per_query), size=(RESAMPLES, len(per_query)))
@@ -213,7 +200,6 @@ def measure(split_name: str, subset: str, method: str, pairs: list[GoldPair], ra
 def metric_rows(
     run: Run, pairs: list[GoldPair], sides: Mapping[str, Side], baseline_results: list[BaselineResult]
 ) -> dict[str, list[Metric]]:
-    """Recall per split (test, dev, all), subset and method: the run first, then each JQL baseline."""
     earlier = [p for p in pairs if p.candidate_before_duplicate]
     methods = [(run.name, run_ranks(run, earlier))]
     methods += [
@@ -329,7 +315,6 @@ def document(
     snapshot: Snapshot,
     config: dict,
 ) -> dict:
-    """Everything `report` shows, as data for `--out`."""
     return {
         "method": run.name,
         "config": config,

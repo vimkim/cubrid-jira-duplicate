@@ -1,4 +1,3 @@
-"""Issue-text helpers: language detection, key masking, tokenizing, safe JQL text searches, and code signals."""
 
 import re
 from typing import Literal
@@ -11,7 +10,6 @@ SPECIAL = re.compile(r'[+\-&|!(){}\[\]^"~*?:\\/]')
 OPERATORS = {"AND", "OR", "NOT", "TO"}
 
 ISSUE_KEY = re.compile(r"CBRD-\d+", re.IGNORECASE)
-# Identifiers that carry an issue number: cbrd_27516, CBRD27516, and test databases such as db25833.
 KEY_IDENTIFIER = re.compile(r"cbrd[-_]?\d+|(?<![a-z0-9])db_?\d{5}(?!\d)", re.IGNORECASE)
 KEY_PLACEHOLDER = "#"
 TOKEN_RUN = re.compile(r"[a-z0-9_]+|[가-힣ㄱ-ㅎㅏ-ㅣ]+")
@@ -37,17 +35,14 @@ def text_search_jql(words: list[str], variant: Variant, created: str) -> str:
 
 
 def mask_keys(text: str) -> str:
-    """Replace every CBRD-<digits>, also inside URLs, so a draft cannot name its original."""
     return ISSUE_KEY.sub(KEY_PLACEHOLDER, text)
 
 
 def mask_key_identifiers(text: str) -> str:
-    """`mask_keys`, and also identifiers named after an issue. Evaluation queries use this (requirements 7.2)."""
     return KEY_IDENTIFIER.sub(KEY_PLACEHOLDER, text)
 
 
 def tokenize(text: str) -> list[str]:
-    """Lowercase ASCII runs whole plus their `_` parts, and Hangul runs as character bigrams."""
     tokens: list[str] = []
     for run in TOKEN_RUN.findall(text.lower()):
         if HANGUL.match(run):
@@ -74,7 +69,6 @@ ERROR_CODE = re.compile(r"\bER_[A-Z0-9_]+\b|(?<![\w.])-\d{2,5}(?![\w.])")
 
 
 def stack_functions(text: str, n: int = 2) -> list[str]:
-    """The first `n` distinct function names of a gdb-style call stack, skipping abort and signal frames."""
     names: list[str] = []
     for name in FRAME.findall(text):
         if name not in NOISE_FRAMES and name not in names:
@@ -85,10 +79,8 @@ def stack_functions(text: str, n: int = 2) -> list[str]:
 
 
 def identifiers(text: str) -> list[str]:
-    """Source file names, snake_case and CamelCase names, in order of first appearance."""
     return list(dict.fromkeys(IDENTIFIER.findall(text)))
 
 
 def error_codes(text: str) -> list[str]:
-    """ER_* names and negative error numbers such as -1114, in order of first appearance."""
     return list(dict.fromkeys(ERROR_CODE.findall(text)))

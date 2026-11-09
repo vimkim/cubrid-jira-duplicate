@@ -1,23 +1,3 @@
-"""Candidate search over the local index, chosen by recall on the gold pairs (docs/requirements.md 7.4).
-
-Each channel ranks issues on its own, after the time cutoff and the excluded key:
-
-| channel | ranks issues by |
-|---|---|
-| L | BM25 of the best row (body or comment) for the whole query text |
-| D | e5-small cosine of the best row for the whole query text |
-| T | BM25 of the summary for the query title |
-| TD | e5-small cosine of the summary for the query title |
-| S | BM25 of the best row for the top two call-stack function names of the query, if it has a stack |
-
-BM25 is Lucene's, as the measured bm25s library computes it, over the `text.tokenize` tokens of the whole
-index: idf = ln(1 + (N - df + 0.5) / (df + 0.5)), term score = idf * tf / (tf + k1 * (1 - b + b * dl / avgdl)),
-summed over the query tokens with repetition. N, df, and avgdl count every stored row (or summary), so the
-statistics do not depend on the query time.
-
-The method fuses the top `depth` issues of each channel with weighted reciprocal rank fusion and adds a
-boost for issues created near the query time, before or after it. Ties go to the lower key number.
-"""
 
 import math
 import time
@@ -77,13 +57,11 @@ class Ranking:
 
 
 def top(scores: np.ndarray, n: int) -> np.ndarray:
-    """Positions of the n best finite scores; ties keep issue order, which is key-number order."""
     order = np.argsort(-scores, kind="stable")[:n]
     return order[np.isfinite(scores[order])]
 
 
 class Searcher:
-    """Runs one `Method` over an `Index`. Load once, then call `rank` or `search` per query."""
 
     def __init__(
         self,
@@ -158,7 +136,6 @@ class Searcher:
         return np.where(issue_ok & (scores > 0), scores, NEG)
 
     def bm25(self, field: Field, tokens: list[str]) -> np.ndarray:
-        """The BM25 of every row (in `arrays.row_ids` order) or every summary (in issue order) for `tokens`."""
         a = self.arrays
         ids, lengths = (a.row_ids, a.row_tokens) if field == "rows" else (self.numbers, a.title_tokens)
         n, avgdl = len(ids), lengths.mean() if len(ids) else 1.0
@@ -167,7 +144,6 @@ class Searcher:
         for term, docs, tfs in self.index.postings(field, counts):
             idf = math.log(1 + (n - len(docs) + 0.5) / (len(docs) + 0.5))
             at = np.searchsorted(ids, docs)
-            # A sync in another process may have added documents after this searcher loaded the arrays.
             known = (at < n) & (ids[at.clip(max=n - 1)] == docs)
             at, tf = at[known], tfs[known]
             positions.append(at)

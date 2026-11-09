@@ -1,18 +1,3 @@
-"""The local index: one SQLite database with the CBRD issues, their searchable rows, and their vectors.
-
-`<root>/index.db` holds:
-
-- `issues(key, number, created, updated, data)`: `data` is the `Issue` as JSON, times are epoch seconds.
-- `rows(id, key, ordinal, kind, issue_created, written, digest, tokens, vector)`: `corpus.rows(issue)[ordinal]`.
-  `digest` hashes the row text, so a sync keeps the vector of an unchanged row; `vector` is NULL until embedded.
-  `tokens` counts the `text.tokenize` tokens of the row.
-- `titles(key, digest, tokens, vector)`: the summary of each issue, its token count, and its vector.
-- `rows_postings` and `titles_postings`: per `text.tokenize` term, the documents that contain it as packed
-  int32 arrays: `docs` holds `rows.id` or the issue number, `tfs` how often the term occurs there.
-- `meta(name, value)`: schema version, embedding model, and the sync state.
-
-`<root>/models/` caches the embedding model and `<root>/raw/` the JIRA responses of the last syncs.
-"""
 
 import hashlib
 import json
@@ -35,7 +20,6 @@ from cbrd_dup.embed import DIM, Embedder, as_passage
 from cbrd_dup.jira import key_number
 from cbrd_dup.text import tokenize
 
-# Bump when the tables or `text.tokenize` change: an index of another version is rebuilt by the next sync.
 SCHEMA = "2"
 HOME_ENV = "CUBRID_JIRA_DUP_HOME"
 EMBED_CHUNK = 512
@@ -65,7 +49,6 @@ class SyncState(BaseModel):
 
 
 class Snapshot(BaseModel):
-    """Which corpus a measurement ran on."""
 
     issues: int
     synced_at: datetime
@@ -75,7 +58,6 @@ class Snapshot(BaseModel):
 
 @dataclass(frozen=True)
 class Arrays:
-    """The index as arrays for search. Issues are in key-number order, rows in id order."""
 
     keys: list[str]
     created: np.ndarray
@@ -125,10 +107,6 @@ def vectors_of(blobs: list[bytes | None]) -> tuple[np.ndarray, np.ndarray]:
 
 
 class Postings:
-    """The posting changes of one sync, written in `write` with one read and one write per touched term.
-
-    With `rebuild`, `write` starts from no postings instead of the stored ones, so only additions matter.
-    """
 
     def __init__(self, db: sqlite3.Connection, rebuild: bool):
         self.db, self.rebuild = db, rebuild
@@ -188,7 +166,6 @@ class Index:
             self.root.mkdir(parents=True, exist_ok=True)
             db = sqlite3.connect(self.path)
             if schema_of(db) not in (None, SCHEMA):
-                # Another version: start empty, so the next sync fetches and indexes every issue again.
                 db.close()
                 for path in (self.path, self.path.with_name(self.path.name + "-journal")):
                     path.unlink(missing_ok=True)
@@ -212,7 +189,6 @@ class Index:
     def _set_meta(self, name: str, value: str) -> None:
         self.db.execute("insert or replace into meta values (?, ?)", (name, value))
 
-    # ---- sync state
 
     def state(self) -> SyncState | None:
         if not self.path.exists():
@@ -236,17 +212,11 @@ class Index:
             self._set_meta("attempted_at", when.isoformat())
 
     def apply(self, issues: Iterable[Issue], synced_at: datetime, errors: list[str], replace_all: bool) -> int:
-        """Store fetched issues and the new sync state in one transaction; returns how many issues changed.
-
-        With `replace_all`, issues missing from `issues` are dropped and the postings are rebuilt from scratch.
-        An unchanged issue keeps its rows.
-        """
         changed = 0
         with self.db:
             postings = Postings(self.db, rebuild=replace_all)
             fetched = set()
             for issue in issues:
-                # A second copy in one sync would enter the postings twice; the next sync refetches a newer one.
                 if issue.key in fetched:
                     continue
                 fetched.add(issue.key)
@@ -307,15 +277,12 @@ class Index:
         return True
 
     def _delete(self, key: str) -> None:
-        """Only a full sync deletes, and it rebuilds the postings, so they need no removal here."""
         self.db.execute("delete from rows where key = ?", (key,))
         self.db.execute("delete from titles where key = ?", (key,))
         self.db.execute("delete from issues where key = ?", (key,))
 
-    # ---- reading
 
     def issues(self, keys: Iterable[str] | None = None) -> list[Issue]:
-        """Issues in key-number order: all of them, or those of `keys` that exist."""
         if keys is None:
             found = self.db.execute("select data from issues order by number").fetchall()
         else:
@@ -341,7 +308,6 @@ class Index:
         return self._meta("model") if self.path.exists() else None
 
     def pending(self) -> int:
-        """Rows and titles still without a vector."""
         return sum(
             self.db.execute(f"select count(*) from {table} where vector is null").fetchone()[0]
             for table in ("rows", "titles")
@@ -372,16 +338,13 @@ class Index:
         )
 
     def postings(self, field: Field, terms: Iterable[str]) -> Iterator[tuple[str, np.ndarray, np.ndarray]]:
-        """(term, documents, term frequencies) of each of `terms` that occurs in `field`."""
         for term in terms:
             found = self.db.execute(f"select docs, tfs from {field}_postings where term = ?", (term,)).fetchone()
             if found:
                 yield term, np.frombuffer(found[0], np.int32), np.frombuffer(found[1], np.int32)
 
-    # ---- embedding
 
     def embed_pending(self, embedder: Embedder, progress: Callable[[str], None] = lambda _: None) -> int:
-        """Embed every row and title without a vector, committing each chunk so an interrupt loses little."""
         if self._meta("model") != embedder.model_id:
             with self.db:
                 self.db.execute("update rows set vector = NULL")

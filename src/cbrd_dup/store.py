@@ -34,7 +34,6 @@ def show(path: Path) -> str:
 
 
 def write_text_atomic(path: Path, text: str) -> None:
-    """Write through a temporary file and rename, so a reader never sees half a file."""
     path.parent.mkdir(parents=True, exist_ok=True)
     partial = path.with_name(path.name + ".tmp")
     partial.write_text(text, encoding="utf-8")

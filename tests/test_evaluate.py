@@ -14,7 +14,6 @@ LATE = [comment("2", "giraffe", at(2000)), comment("3", "walrus", at(200), at(30
 
 
 def corpus_issues(late_comments=True):
-    """CBRD-1 has an early comment, and unless dropped a late comment and an early comment edited late."""
     return [
         issue("CBRD-1", at(0), "storage", "", EARLY + (LATE if late_comments else [])),
         issue("CBRD-5", at(10), "unrelated apples"),

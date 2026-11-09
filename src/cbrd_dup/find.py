@@ -1,7 +1,3 @@
-"""`candidate-find`: suggest existing CBRD issues that a draft or an issue may duplicate, for an LLM to judge.
-
-The tool only suggests. Each candidate carries the signals that raised it, so the reader can weigh them.
-"""
 
 import re
 import time
@@ -24,13 +20,13 @@ METHOD = METHODS["hybrid"]
 ISSUE_KEY = re.compile(r"cbrd-(\d+)", re.IGNORECASE)
 MAX_SHARED = 8
 DRAFT_MAX_CHARS = 200_000
-# Up to this many new texts embed with the query's model: loading a second model costs about 2 s.
+# Loading a second onnxruntime session costs about 2 s, so a few new texts reuse the query's model.
 FEW_PENDING = 32
 CHANNEL_SIGNALS = {"L": "lexical_rank", "D": "semantic_rank", "T": "title_rank", "S": "stack_rank"}
 
 
 class InputError(ValueError):
-    """The input cannot be searched; the command exits with code 2 before searching."""
+    ...
 
 
 @dataclass(frozen=True)
@@ -48,7 +44,6 @@ def within(text: str, max_chars: int, what: str) -> str:
 
 
 def read_draft(path: Path, max_chars: int) -> Source:
-    """A Markdown draft: the first `# ` heading is the title, every other line is the body."""
     if not path.is_file():
         raise InputError(f"{path} is neither an issue key such as CBRD-12345 nor a readable file")
     lines = within(path.read_text(encoding="utf-8"), max_chars, str(path)).splitlines()
@@ -65,10 +60,6 @@ def text_source(kind: Literal["draft", "title"], title: str, body: str) -> Sourc
 
 
 def parse_source(source: str | None, title: str | None, stdin: Callable[[], str], max_chars: int) -> Source:
-    """Exactly one input: a draft path, an issue key, or a title with the body on stdin.
-
-    A draft or a body longer than `max_chars` characters is refused (requirements FR-11).
-    """
     if (source is None) == (title is None):
         raise InputError("give exactly one input: a draft file, an issue key, or --title with the body on stdin")
     if title is not None:
@@ -79,7 +70,6 @@ def parse_source(source: str | None, title: str | None, stdin: Callable[[], str]
 
 
 def shared(found: list[str], candidate: list[str]) -> list[str]:
-    """Items of `found` that `candidate` also has, ignoring case, each once, in the order of `found`."""
     theirs = {item.lower() for item in candidate}
     first = {}
     for item in found:
@@ -119,13 +109,6 @@ def find(
     clock: Callable[[], datetime],
     progress: Callable[[str], None],
 ) -> dict:
-    """Sync unless `sync` is None, embed what is missing with `embedder`, search, and return the JSON document.
-
-    `query_embedder` embeds the query and up to FEW_PENDING new texts; it can use fewer threads, as one short
-    text gains little from more.
-
-    Raises InputError for an unknown key and when there is no index to search.
-    """
     started_at = clock()
     started = time.perf_counter()
     errors: list[str] = []
@@ -156,7 +139,6 @@ def find(
         if not found:
             raise InputError(f"{source.key} is not in the index")
         source = Source("key", found[0].summary, found[0].description, source.key)
-        # Recency counts from when the issue was filed, so issues filed just before or after it are near.
         query_time = found[0].created
     searcher = Searcher(index, METHOD, query_model, clock=lambda: query_time)
     loaded = time.perf_counter()

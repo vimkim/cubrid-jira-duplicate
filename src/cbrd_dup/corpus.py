@@ -1,8 +1,3 @@
-"""The CBRD corpus: issue types, the searchable rows of an issue, and sync from JIRA into the local index.
-
-JIRA JSON is parsed once, in `parse_issue`; everything else works on the typed `Issue`. The index itself
-(`cbrd_dup.index`) stores what a sync fetched.
-"""
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -50,7 +45,6 @@ class SyncResult(NamedTuple):
 
 @dataclass(frozen=True)
 class Row:
-    """One searchable unit of an issue: its summary and description, or one comment."""
 
     key: str
     kind: Literal["body", "comment"]
@@ -101,11 +95,6 @@ def sync_jql(state: "SyncState | None") -> str:
 
 
 def sync(client: JiraClient, index: "Index", now: datetime, full: bool = False) -> SyncResult:
-    """Bring the index up to date. `now` is when the caller started, before the first request.
-
-    The next sync overlaps this one by ten minutes and refetches everything after an incomplete one, which
-    also drops issues JIRA no longer shows. An incremental sync does not detect issues that stopped being visible.
-    """
     previous = index.state()
     state = None if full or previous is None or not previous.complete else previous
     index.record_attempt(now)

@@ -79,7 +79,6 @@ def pair(duplicate: str, candidate: str, created: str = "2025-05-01T10:00:00.000
 
 
 class FakeEmbedder:
-    """Hashes each token to one dimension, so texts that share words point the same way. Records every call."""
 
     model_id = "fake-hash"
 

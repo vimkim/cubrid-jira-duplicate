@@ -117,7 +117,6 @@ class JiraClient:
         return self.search_all_counted(jql, fields, page, **params)[0]
 
     def search_all_counted(self, jql: str, fields: str, page: int = 1000, **params) -> tuple[list[dict], int]:
-        """Like `search_all`, also returning the `total` JIRA reported on the last page."""
         issues: list[dict] = []
         while True:
             body = self.search(jql, fields, page, len(issues), **params).require_ok()

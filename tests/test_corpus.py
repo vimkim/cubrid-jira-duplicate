@@ -62,7 +62,6 @@ def test_default_index_dir_follows_the_environment(monkeypatch, tmp_path):
 
 
 class FakeJira:
-    """Answers search requests from `pages`, keyed by JQL, and records every request."""
 
     def __init__(self):
         self.pages: dict[str, list[dict]] = {}
@@ -96,7 +95,6 @@ def keys(index: Index) -> list[str]:
 
 
 def lexical(idx: Index, words: str) -> tuple[np.ndarray, np.ndarray]:
-    """BM25 of every row, ordered by (issue, ordinal), and of every summary, in issue order."""
     searcher = Searcher(idx, METHODS["bm25"])
     a = searcher.arrays
     by_row = searcher.bm25("rows", tokenize(words))[np.lexsort((a.row_ids, a.row_issue))]
@@ -244,7 +242,6 @@ def test_bm25_is_lucene_bm25_over_every_stored_row_and_counts_repeated_query_wor
     corpus_ = [issue("CBRD-1", at(0), "alpha alpha beta"), issue("CBRD-2", at(1), "beta gamma"), issue("CBRD-3", at(2))]
     idx.apply(corpus_, FIRST, [], replace_all=True)
     by_row, by_title = lexical(idx, "alpha beta beta")
-    # Three rows of 3, 2, and 0 tokens: N = 3, avgdl = 5 / 3. alpha is in one row, beta in two.
     avgdl = 5 / 3
     expected = [lucene(2, 1, 3, 3, avgdl) + 2 * lucene(1, 2, 3, 3, avgdl), 2 * lucene(1, 2, 3, 2, avgdl), 0]
     assert by_row == pytest.approx(expected)

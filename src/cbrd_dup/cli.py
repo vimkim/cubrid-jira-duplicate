@@ -76,12 +76,10 @@ def jira_session(data_dir: Path, refresh: bool) -> Iterator[tuple[JiraClient, Da
 
 
 def jira_client(cache_dir: Path) -> JiraClient:
-    """The client every index sync uses; a seam for tests."""
     return JiraClient(cache_dir, refresh=True)
 
 
 def make_embedder(index: Index, threads: int | None) -> Embedder:
-    """The model every index embedding uses; a seam for tests."""
     return FastEmbedder(index.models, threads or default_threads())
 
 

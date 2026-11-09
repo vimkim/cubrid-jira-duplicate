@@ -1,9 +1,3 @@
-"""Sentence vectors from multilingual-e5-small on the CPU, behind a protocol so tests inject a fake.
-
-The model runs through fastembed and onnxruntime, without torch. It is downloaded once, on first use,
-into the directory the caller names (about 465 MB). e5 expects "query: " and "passage: " prefixes;
-texts are cut at MAX_CHARS characters before tokenizing, and the tokenizer stops at 512 tokens.
-"""
 
 import os
 from collections.abc import Sequence
@@ -16,8 +10,8 @@ MODEL_ID = "intfloat/multilingual-e5-small"
 MODEL_FILE = "onnx/model.onnx"
 DIM = 384
 MAX_CHARS = 4000
-# A batch of 32 texts at 512 tokens held about 1.8 GB of attention buffers at peak; 8 holds a quarter of that and
-# embedded the corpus as fast on 16 threads (measured 2026-11-09).
+# onnxruntime holds attention buffers for a whole batch: 32 texts at 512 tokens peaked near 1.8 GB,
+# 8 peaked at a quarter of that and embedded the corpus as fast (measured 2026-11-09).
 BATCH = 8
 QUERY_THREADS = 4
 
@@ -26,7 +20,6 @@ class Embedder(Protocol):
     model_id: str
 
     def embed(self, texts: Sequence[str]) -> np.ndarray:
-        """One unit-length float32 row of width DIM per text, in input order."""
         ...
 
 
@@ -43,7 +36,6 @@ def default_threads() -> int:
 
 
 def query_threads(threads: int | None) -> int:
-    """Threads for embedding one query: at most QUERY_THREADS, since more add CPU time but little speed."""
     return min(threads or QUERY_THREADS, QUERY_THREADS)
 
 
@@ -77,7 +69,6 @@ class FastEmbedder:
             return np.zeros((0, DIM), np.float32)
         if self._model is None:
             self._model = self._load()
-        # Batches of similar length pad less; padding dominates the cost of long, uneven texts.
         order = sorted(range(len(texts)), key=lambda i: len(texts[i]))
         vectors = np.empty((len(texts), DIM), np.float32)
         for slot, vector in zip(order, self._model.embed([texts[i] for i in order], batch_size=BATCH), strict=True):
