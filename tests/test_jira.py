@@ -88,7 +88,7 @@ def test_response_is_cached_in_the_old_record_format(tmp_path):
     assert (client.network, client.cache) == (1, 1)
     record = json.loads((tmp_path / "raw" / f"{KNOWN_KEY}.json").read_text(encoding="utf-8"))
     assert list(record) == ["url", "fetched_at", "status", "response"]
-    assert record["url"] == KNOWN_URL
+    assert record["url"] == KNOWN_HTTPS_URL
     assert not list((tmp_path / "raw").glob("*.tmp"))
 
 

@@ -1,7 +1,7 @@
 # CBRD 중복 이슈 검사기 요구사항
 
 - 상태: 리뷰 반영 초안 (2026-11-06)
-- 관련 이슈: [CBRD-27978](http://jira.cubrid.org/browse/CBRD-27978)
+- 관련 이슈: [CBRD-27978](https://jira.cubrid.org/browse/CBRD-27978)
 - 근거: `docs/issue-brief.md`, `docs/evidence.md`, `src/cbrd_dup/`, `data/`
 - 리뷰: `docs/reviews/requirements-review.md` (Codex, 17건). 반영 내역은 10장에 있다.
 

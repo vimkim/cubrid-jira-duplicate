@@ -2,7 +2,8 @@
 
 This module is the only code that talks to JIRA. Every network request waits at least `min_interval`
 seconds after the previous one, transient failures are retried with backoff, and each raw response is
-saved under `<cache_dir>/<SHA-1 of the request URL>.json` and reused on later runs unless `refresh` is set.
+saved under `<cache_dir>/<SHA-1 of the request URL with an http scheme>.json` and reused on later runs
+unless `refresh` is set.
 """
 
 import hashlib
@@ -17,7 +18,7 @@ from urllib.parse import urlencode
 import httpx
 from tenacity import Retrying, retry_if_exception_type, stop_after_attempt, wait_exponential
 
-BASE = "http://jira.cubrid.org/rest/api/2/search"
+BASE = "https://jira.cubrid.org/rest/api/2/search"
 MIN_INTERVAL = 0.25
 TIMEOUT = 120.0
 ATTEMPTS = 4
@@ -48,7 +49,9 @@ def search_url(jql: str, fields: str = "key", max_results: int = 50, start_at: i
 
 
 def cache_key(url: str) -> str:
-    return hashlib.sha1(url.encode(), usedforsecurity=False).hexdigest()
+    """Hash the URL as `http://`, the scheme existing cache files were keyed under before the move to HTTPS."""
+    legacy = "http://" + url.split("://", 1)[1]
+    return hashlib.sha1(legacy.encode(), usedforsecurity=False).hexdigest()
 
 
 def key_number(key: str) -> int:
@@ -78,7 +81,7 @@ class JiraClient:
         self.cache = 0
         self._sleep = sleep
         self._last_request = 0.0
-        self._http = httpx.Client(transport=transport, timeout=TIMEOUT, follow_redirects=True)
+        self._http = httpx.Client(transport=transport, timeout=TIMEOUT, follow_redirects=False)
 
     def __enter__(self) -> Self:
         return self

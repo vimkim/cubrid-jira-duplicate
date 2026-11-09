@@ -1,6 +1,6 @@
 # CBRD 중복 이슈 검사기 PoC
 
-CUBRID JIRA(`jira.cubrid.org`)의 CBRD 프로젝트에서 새 이슈를 등록하기 전과 후에, 이미 등록된 중복·관련 이슈를 찾아 주는 검사기의 PoC 저장소다. 관련 이슈는 [CBRD-27978](http://jira.cubrid.org/browse/CBRD-27978)이다.
+CUBRID JIRA(`jira.cubrid.org`)의 CBRD 프로젝트에서 새 이슈를 등록하기 전과 후에, 이미 등록된 중복·관련 이슈를 찾아 주는 검사기의 PoC 저장소다. 관련 이슈는 [CBRD-27978](https://jira.cubrid.org/browse/CBRD-27978)이다.
 
 지금은 요구사항과 근거 측정 단계다. 검사기 코드는 아직 없고, 측정 명령만 `cbrd-dup`에 있다.
 
