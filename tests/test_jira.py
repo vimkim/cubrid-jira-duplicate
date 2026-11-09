@@ -172,3 +172,12 @@ def test_search_all_raises_on_invalid_query(tmp_path):
     client, _ = make_client(tmp_path, lambda request: httpx.Response(400, json={"errorMessages": ["bad"]}))
     with pytest.raises(JiraError, match="search failed .400."):
         client.search_all("nonsense", "key")
+
+
+@pytest.mark.parametrize("content", [b"<html>down for maintenance</html>", b"\xff\xfe", b"[1, 2]"])
+def test_a_200_reply_that_is_not_a_json_object_is_a_jira_error_and_is_not_cached(tmp_path, content):
+    client, _ = make_client(tmp_path, lambda request: httpx.Response(200, content=content))
+    with client, pytest.raises(JiraError, match="not JSON|not a JSON object"):
+        client.search(JQL, FIELDS)
+    assert client.network == 1
+    assert not (tmp_path / "raw").exists() or not list((tmp_path / "raw").iterdir())

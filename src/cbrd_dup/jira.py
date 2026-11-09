@@ -149,4 +149,12 @@ class JiraClient:
             raise _Transient(f"HTTP {status} for {url}")
         if status not in (200, 400):
             raise JiraError(f"HTTP {status} for {url}")
-        return Reply(status, response.json() if response.content else {})
+        if not response.content:
+            return Reply(status, {})
+        try:
+            body = response.json()
+        except ValueError as err:
+            raise JiraError(f"HTTP {status} for {url}: the reply is not JSON") from err
+        if not isinstance(body, dict):
+            raise JiraError(f"HTTP {status} for {url}: the reply is not a JSON object")
+        return Reply(status, body)

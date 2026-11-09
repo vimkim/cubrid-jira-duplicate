@@ -342,6 +342,18 @@ def test_a_failed_sync_searches_the_existing_index_and_exits_2(index, monkeypatc
     assert "sync failed" in result.stderr
 
 
+def test_a_reply_that_is_not_json_searches_the_existing_index_and_exits_2(index, monkeypatch):
+    use_jira(monkeypatch, lambda request: httpx.Response(200, text="<html>maintenance</html>"))
+    result = find(index, "CBRD-3", "--json")
+    assert result.exit_code == 2
+    document = json.loads(result.stdout)
+    assert document["complete"] is False
+    assert "sync failed" in document["errors"][0]
+    assert document["candidates"][0]["key"] == "CBRD-1"
+    assert document["index"]["last_sync_attempt"] is not None
+    assert "sync failed" in result.stderr
+
+
 def test_the_first_run_builds_the_index_and_embeds_it(tmp_path, embedder, monkeypatch):
     page = {"total": 2, "issues": [raw_issue("CBRD-1", at(0), summary="heap"), raw_issue("CBRD-2", at(1))]}
     use_jira(monkeypatch, lambda request: httpx.Response(200, json=page))
