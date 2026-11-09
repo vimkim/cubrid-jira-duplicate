@@ -18,6 +18,7 @@ import json
 import os
 import sqlite3
 import time
+from collections import Counter
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import datetime
@@ -305,16 +306,23 @@ class Index:
         )
 
     def bm25(self, table: str, tokens: Iterable[str]) -> tuple[np.ndarray, np.ndarray]:
-        """FTS5 BM25 of each matching rowid of `rows_fts` or `titles_fts` for the distinct tokens, higher is better."""
+        """FTS5 BM25 of each matching rowid of `rows_fts` or `titles_fts`, higher is better.
+
+        A token repeated n times in the query counts n times, as in the measured method. BM25 is a sum over
+        query terms, so terms are queried in groups of equal count and each group's sum is multiplied by it.
+        """
         if table not in ("rows_fts", "titles_fts"):
             raise ValueError(table)
-        terms = list(dict.fromkeys(tokens))
+        by_count: dict[int, list[str]] = {}
+        for term, count in Counter(tokens).items():
+            by_count.setdefault(count, []).append(term)
         scores: dict[int, float] = {}
-        for start in range(0, len(terms), CHUNK_TERMS):
-            match = " OR ".join(f'"{t}"' for t in terms[start : start + CHUNK_TERMS])
-            query = f"select rowid, bm25({table}) from {table} where {table} match ?"
-            for rowid, score in self.db.execute(query, (match,)):
-                scores[rowid] = scores.get(rowid, 0.0) - score
+        query = f"select rowid, bm25({table}) from {table} where {table} match ?"
+        for count, terms in by_count.items():
+            for start in range(0, len(terms), CHUNK_TERMS):
+                match = " OR ".join(f'"{t}"' for t in terms[start : start + CHUNK_TERMS])
+                for rowid, score in self.db.execute(query, (match,)):
+                    scores[rowid] = scores.get(rowid, 0.0) - count * score
         return np.fromiter(scores.keys(), np.int64, len(scores)), np.fromiter(scores.values(), float, len(scores))
 
     # ---- embedding

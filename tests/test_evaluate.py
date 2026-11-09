@@ -86,6 +86,14 @@ def test_the_stack_channel_matches_the_top_frames_and_only_runs_for_a_stack(tmp_
     assert "S" not in found.rank(Query("core dump", "no stack here", QUERY_TIME, QUERY_KEY), 20).channel_ranks
 
 
+@pytest.mark.parametrize(("words", "first"), [("alpha beta beta", "CBRD-2"), ("alpha alpha beta", "CBRD-1")])
+def test_a_repeated_query_word_weighs_more(tmp_path, words, first):
+    filler = [issue(f"CBRD-{n}", at(n), "filler", "other words") for n in range(3, 9)]
+    issues = [issue("CBRD-1", at(0), "alpha filler"), issue("CBRD-2", at(1), "beta filler"), *filler]
+    ranked = searcher(tmp_path, "bm25", issues).search(Query(words, "", QUERY_TIME, None), 2)
+    assert ranked[0] == first
+
+
 def test_recency_puts_the_newer_of_two_equal_issues_first(tmp_path):
     issues = [issue("CBRD-1", at(-100 * 86400), "same words"), issue("CBRD-2", at(500), "same words")]
     ranked = searcher(tmp_path, "hybrid", issues).rank(Query("same words", "", QUERY_TIME, None), 20)
