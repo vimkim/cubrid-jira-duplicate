@@ -67,8 +67,13 @@ def parse_source(source: str | None, title: str | None, stdin: Callable[[], str]
 
 
 def shared(found: list[str], candidate: list[str]) -> list[str]:
+    """Items of `found` that `candidate` also has, ignoring case, each once, in the order of `found`."""
     theirs = {item.lower() for item in candidate}
-    return [item for item in found if item.lower() in theirs][:MAX_SHARED]
+    first = {}
+    for item in found:
+        if item.lower() in theirs:
+            first.setdefault(item.lower(), item)
+    return list(first.values())[:MAX_SHARED]
 
 
 def candidate_record(rank: int, issue: Issue, ranking: Ranking, query_text: str, at: datetime) -> dict:

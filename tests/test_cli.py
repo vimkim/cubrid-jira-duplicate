@@ -164,7 +164,7 @@ def find(index, *args, input=None):
 
 def test_a_draft_file_gives_one_json_document_on_stdout(index, tmp_path):
     draft = tmp_path / "draft.md"
-    draft.write_text("intro line\n# Crash in heap_update during vacuum\n\nER_HEAP_UNKNOWN_OBJECT, -1114\n")
+    draft.write_text("intro line\n# Crash in heap_update during vacuum\n\nER_HEAP_UNKNOWN_OBJECT, -1114, HEAP_UPDATE\n")
     result = find(index, str(draft), "--no-sync", "--json", "-k", "3")
     assert result.exit_code == 0, result.stderr
     document = json.loads(result.stdout)
