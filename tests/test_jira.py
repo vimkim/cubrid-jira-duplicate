@@ -10,6 +10,7 @@ KNOWN_URL = (
     "http://jira.cubrid.org/rest/api/2/search?jql=project+%3D+CBRD+AND+resolution+%3D+Duplicate+ORDER+BY+key+ASC"
     "&fields=summary%2Ccreated%2Cissuetype%2Cissuelinks%2Ccomment&maxResults=1000&startAt=0"
 )
+KNOWN_HTTPS_URL = KNOWN_URL.replace("http://", "https://", 1)
 KNOWN_KEY = "0dcefa628f217cf70b63239f704ac41517235b22"
 JQL = "project = CBRD AND resolution = Duplicate ORDER BY key ASC"
 FIELDS = "summary,created,issuetype,issuelinks,comment"
@@ -28,8 +29,37 @@ def ok(request):
 
 
 def test_cache_key_for_known_request():
-    assert search_url(JQL, FIELDS, 1000, 0) == KNOWN_URL
+    assert search_url(JQL, FIELDS, 1000, 0) == KNOWN_HTTPS_URL
+    assert cache_key(search_url(JQL, FIELDS, 1000, 0)) == KNOWN_KEY
     assert cache_key(KNOWN_URL) == KNOWN_KEY
+
+
+def test_requests_go_straight_to_https(tmp_path):
+    seen = []
+
+    def record(request):
+        seen.append(request.url)
+        return ok(request)
+
+    client, _ = make_client(tmp_path, record)
+    client.search(JQL, FIELDS, 1000, 0)
+    assert [(url.scheme, url.host) for url in seen] == [("https", "jira.cubrid.org")]
+
+
+def test_redirect_is_reported_not_followed_or_cached(tmp_path):
+    location = KNOWN_HTTPS_URL.replace("%", "%25")
+    calls = []
+
+    def redirecting(request):
+        calls.append(request.url)
+        if len(calls) == 1:
+            return httpx.Response(302, headers={"Location": location})
+        return httpx.Response(400, json={"errorMessages": ["The character '%' is a reserved JQL character."]})
+
+    client, _ = make_client(tmp_path, redirecting)
+    with pytest.raises(JiraError):
+        client.search(JQL, FIELDS, 1000, 0)
+    assert not list((tmp_path / "raw").glob("*.json"))
 
 
 def test_extra_params_follow_the_standard_ones():
