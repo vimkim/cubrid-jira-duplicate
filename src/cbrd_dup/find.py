@@ -46,7 +46,11 @@ def within(text: str, max_chars: int, what: str) -> str:
 def read_draft(path: Path, max_chars: int) -> Source:
     if not path.is_file():
         raise InputError(f"{path} is neither an issue key such as CBRD-12345 nor a readable file")
-    lines = within(path.read_text(encoding="utf-8"), max_chars, str(path)).splitlines()
+    try:
+        text = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as err:
+        raise InputError(f"{path} is not valid UTF-8 text") from err
+    lines = within(text, max_chars, str(path)).splitlines()
     heading = next((n for n, line in enumerate(lines) if line.startswith("# ")), None)
     if heading is None:
         raise InputError(f"{path} has no `# ` title line")
@@ -63,7 +67,11 @@ def parse_source(source: str | None, title: str | None, stdin: Callable[[], str]
     if (source is None) == (title is None):
         raise InputError("give exactly one input: a draft file, an issue key, or --title with the body on stdin")
     if title is not None:
-        return text_source("title", title, within(stdin(), max_chars, "the body on stdin"))
+        try:
+            body = stdin()
+        except UnicodeDecodeError as err:
+            raise InputError("the body on stdin is not valid UTF-8 text") from err
+        return text_source("title", title, within(body, max_chars, "the body on stdin"))
     if match := ISSUE_KEY.fullmatch(source.strip()):
         return Source("key", "", "", f"CBRD-{int(match.group(1))}")
     return read_draft(Path(source), max_chars)

@@ -275,6 +275,21 @@ def test_max_chars_bounds_a_draft_file(index, embedder, tmp_path):
     assert embedder.calls == []
 
 
+@pytest.mark.parametrize("via", ["draft file", "stdin"])
+def test_input_that_is_not_utf8_exits_2_before_any_search(index, embedder, tmp_path, via):
+    broken = b"# loaddb is slow \xff\n\nit takes an hour\n"
+    if via == "draft file":
+        draft = tmp_path / "draft.md"
+        draft.write_bytes(broken)
+        result = find(index, str(draft), "--no-sync", "--json")
+    else:
+        result = find(index, "--title", "loaddb is slow", "--no-sync", "--json", input=broken)
+    assert result.exit_code == 2
+    assert "UTF-8" in result.stderr
+    assert result.stdout == ""
+    assert embedder.calls == []
+
+
 def test_a_draft_without_a_title_line_is_refused(index, tmp_path):
     draft = tmp_path / "draft.md"
     draft.write_text("no heading here\n")
