@@ -256,6 +256,25 @@ def test_bad_input_exits_2_with_a_message_and_no_search(index, embedder, args, m
     assert embedder.calls == []
 
 
+def test_a_body_on_stdin_over_200000_characters_is_refused_before_any_search(index, embedder):
+    result = find(index, "--title", "big", "--no-sync", "--json", input="a" * 200_001)
+    assert result.exit_code == 2
+    assert "200,001 characters" in result.stderr
+    assert (result.stdout, embedder.calls) == ("", [])
+
+
+def test_max_chars_bounds_a_draft_file(index, embedder, tmp_path):
+    draft = tmp_path / "draft.md"
+    draft.write_text("# loaddb is slow\n\nit takes an hour\n")
+    size = len(draft.read_text())
+    assert find(index, str(draft), "--no-sync", "--max-chars", str(size)).exit_code == 0
+    embedder.calls.clear()
+    refused = find(index, str(draft), "--no-sync", "--max-chars", str(size - 1))
+    assert refused.exit_code == 2
+    assert "--max-chars" in refused.stderr
+    assert embedder.calls == []
+
+
 def test_a_draft_without_a_title_line_is_refused(index, tmp_path):
     draft = tmp_path / "draft.md"
     draft.write_text("no heading here\n")

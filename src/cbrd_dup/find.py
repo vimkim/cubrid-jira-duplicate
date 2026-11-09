@@ -23,6 +23,7 @@ SCHEMA = "cubrid-jira-dup/candidates/1"
 METHOD = METHODS["hybrid"]
 ISSUE_KEY = re.compile(r"cbrd-(\d+)", re.IGNORECASE)
 MAX_SHARED = 8
+DRAFT_MAX_CHARS = 200_000
 CHANNEL_SIGNALS = {"L": "lexical_rank", "D": "semantic_rank", "T": "title_rank", "S": "stack_rank"}
 
 
@@ -38,11 +39,17 @@ class Source:
     key: str | None = None
 
 
-def read_draft(path: Path) -> Source:
+def within(text: str, max_chars: int, what: str) -> str:
+    if len(text) > max_chars:
+        raise InputError(f"{what} has {len(text):,} characters, over the limit of {max_chars:,} (--max-chars)")
+    return text
+
+
+def read_draft(path: Path, max_chars: int) -> Source:
     """A Markdown draft: the first `# ` heading is the title, every other line is the body."""
     if not path.is_file():
         raise InputError(f"{path} is neither an issue key such as CBRD-12345 nor a readable file")
-    lines = path.read_text(encoding="utf-8").splitlines()
+    lines = within(path.read_text(encoding="utf-8"), max_chars, str(path)).splitlines()
     heading = next((n for n, line in enumerate(lines) if line.startswith("# ")), None)
     if heading is None:
         raise InputError(f"{path} has no `# ` title line")
@@ -55,15 +62,18 @@ def text_source(kind: Literal["draft", "title"], title: str, body: str) -> Sourc
     return Source(kind, title.strip(), body.strip())
 
 
-def parse_source(source: str | None, title: str | None, stdin: Callable[[], str]) -> Source:
-    """Exactly one input: a draft path, an issue key, or a title with the body on stdin."""
+def parse_source(source: str | None, title: str | None, stdin: Callable[[], str], max_chars: int) -> Source:
+    """Exactly one input: a draft path, an issue key, or a title with the body on stdin.
+
+    A draft or a body longer than `max_chars` characters is refused (requirements FR-11).
+    """
     if (source is None) == (title is None):
         raise InputError("give exactly one input: a draft file, an issue key, or --title with the body on stdin")
     if title is not None:
-        return text_source("title", title, stdin())
+        return text_source("title", title, within(stdin(), max_chars, "the body on stdin"))
     if match := ISSUE_KEY.fullmatch(source.strip()):
         return Source("key", "", "", f"CBRD-{int(match.group(1))}")
-    return read_draft(Path(source))
+    return read_draft(Path(source), max_chars)
 
 
 def shared(found: list[str], candidate: list[str]) -> list[str]:

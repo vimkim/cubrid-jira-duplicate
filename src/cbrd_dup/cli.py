@@ -184,6 +184,9 @@ def candidate_find_command(
     ] = None,
     title: Annotated[str | None, typer.Option("--title", help="The title; the body is read from stdin.")] = None,
     k: Annotated[int, typer.Option("-k", min=1, max=50, help="How many candidates to return.")] = 20,
+    max_chars: Annotated[
+        int, typer.Option("--max-chars", min=1, help="Refuse a draft or a stdin body longer than this many characters.")
+    ] = find.DRAFT_MAX_CHARS,
     as_json: Annotated[bool, typer.Option("--json", help="Write one JSON document to stdout.")] = False,
     no_sync: Annotated[bool, typer.Option("--no-sync", help="Search the index as it is, without asking JIRA.")] = False,
     threads: FindThreadsOption = None,
@@ -200,7 +203,7 @@ def candidate_find_command(
             return corpus.sync(client, index, datetime.now(UTC))
 
     try:
-        query = find.parse_source(source, title, sys.stdin.read)
+        query = find.parse_source(source, title, sys.stdin.read, max_chars)
         document = find.find(
             index,
             query,
