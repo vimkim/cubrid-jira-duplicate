@@ -7,6 +7,7 @@ from typer.testing import CliRunner
 
 from cbrd_dup import cli
 from cbrd_dup.cli import app
+from cbrd_dup.embed import EmbedError, FastEmbedder
 from cbrd_dup.index import Index
 from cbrd_dup.jira import JiraClient, cache_key, search_url
 from cbrd_dup.measure import gold
@@ -389,6 +390,47 @@ def test_many_new_texts_use_the_bulk_threads_and_the_query_at_most_four(
     assert result.exit_code == 0, result.stderr
     assert [len(call) for call in fake.calls] == embedded
     assert asked == threads
+
+
+class BrokenEmbedder:
+    model_id = FakeEmbedder.model_id
+
+    def embed(self, texts):
+        raise EmbedError("model download failed")
+
+
+@pytest.mark.parametrize("pending", [True, False])
+@pytest.mark.parametrize("args", [["--json"], []])
+def test_an_embedding_failure_exits_2_with_a_message_and_writes_no_output(tmp_path, monkeypatch, pending, args):
+    index = Index(tmp_path / "index")
+    index.apply(ISSUES, at(200), [], replace_all=True)
+    if not pending:
+        index.embed_pending(FakeEmbedder())
+    monkeypatch.setattr(cli, "make_embedder", lambda index, threads: BrokenEmbedder())
+    result = find(index, "--title", "loaddb is slow", "--no-sync", *args, input="it takes an hour")
+    assert result.exit_code == 2
+    assert "model download failed" in result.stderr
+    assert result.stdout == ""
+
+
+@pytest.mark.parametrize("breaks", ["loading the model", "running it"])
+def test_the_real_embedder_reports_any_failure_as_an_embed_error(tmp_path, monkeypatch, breaks):
+    embedder = FastEmbedder(tmp_path / "models", threads=1)
+
+    class Dead:
+        def embed(self, texts, batch_size):
+            raise RuntimeError("onnx session died")
+
+    def load():
+        raise OSError("cannot download the model")
+
+    if breaks == "loading the model":
+        monkeypatch.setattr(embedder, "_load", load)
+    else:
+        embedder._model = Dead()
+    with pytest.raises(EmbedError, match=r"download|died"):
+        embedder.embed(["query: heap"])
+    assert embedder.embed([]).shape[0] == 0
 
 
 def test_find_help_says_the_query_uses_at_most_four_threads():

@@ -12,7 +12,7 @@ from typing import Annotated
 import typer
 
 from cbrd_dup import corpus, evaluate, find, search
-from cbrd_dup.embed import QUERY_THREADS, Embedder, FastEmbedder, default_threads, query_threads
+from cbrd_dup.embed import QUERY_THREADS, Embedder, EmbedError, FastEmbedder, default_threads, query_threads
 from cbrd_dup.index import Index, default_index_dir
 from cbrd_dup.jira import JiraClient, JiraError
 from cbrd_dup.measure import baseline as baseline_measure
@@ -214,6 +214,9 @@ def candidate_find_command(
         )
     except find.InputError as err:
         typer.echo(f"error: {err}", err=True)
+        raise typer.Exit(2) from err
+    except EmbedError as err:
+        typer.echo(f"error: embedding failed, no search was run: {err}", err=True)
         raise typer.Exit(2) from err
     if as_json:
         typer.echo(json.dumps(document, ensure_ascii=False, indent=1))

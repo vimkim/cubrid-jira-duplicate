@@ -16,6 +16,10 @@ BATCH = 8
 QUERY_THREADS = 4
 
 
+class EmbedError(RuntimeError):
+    """The embedding model could not be loaded or run."""
+
+
 class Embedder(Protocol):
     model_id: str
 
@@ -67,6 +71,12 @@ class FastEmbedder:
     def embed(self, texts: Sequence[str]) -> np.ndarray:
         if not texts:
             return np.zeros((0, DIM), np.float32)
+        try:
+            return self._embed(texts)
+        except Exception as err:
+            raise EmbedError(f"{MODEL_ID} failed: {err!r}") from err
+
+    def _embed(self, texts: Sequence[str]) -> np.ndarray:
         if self._model is None:
             self._model = self._load()
         order = sorted(range(len(texts)), key=lambda i: len(texts[i]))
