@@ -17,6 +17,7 @@ MODEL_FILE = "onnx/model.onnx"
 DIM = 384
 MAX_CHARS = 4000
 BATCH = 32
+QUERY_THREADS = 4
 
 
 class Embedder(Protocol):
@@ -37,6 +38,11 @@ def as_passage(text: str) -> str:
 
 def default_threads() -> int:
     return max(1, (os.cpu_count() or 2) // 2)
+
+
+def query_threads(threads: int | None) -> int:
+    """Threads for embedding one query: at most QUERY_THREADS, since more add CPU time but little speed."""
+    return min(threads or QUERY_THREADS, QUERY_THREADS)
 
 
 class FastEmbedder:

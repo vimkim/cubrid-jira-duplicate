@@ -12,7 +12,7 @@ from typing import Annotated
 import typer
 
 from cbrd_dup import corpus, evaluate, find, search
-from cbrd_dup.embed import Embedder, FastEmbedder, default_threads
+from cbrd_dup.embed import QUERY_THREADS, Embedder, FastEmbedder, default_threads, query_threads
 from cbrd_dup.index import Index, default_index_dir
 from cbrd_dup.jira import JiraClient, JiraError
 from cbrd_dup.measure import baseline as baseline_measure
@@ -51,6 +51,15 @@ IndexDirOption = Annotated[
 ThreadsOption = Annotated[
     int | None,
     typer.Option("--threads", min=1, help="CPU threads for embedding (default: half the logical CPUs)."),
+]
+FindThreadsOption = Annotated[
+    int | None,
+    typer.Option(
+        "--threads",
+        min=1,
+        help="CPU threads for embedding new issue texts (default: half the logical CPUs);"
+        f" the query itself uses at most {QUERY_THREADS}.",
+    ),
 ]
 RefreshOption = Annotated[bool, typer.Option("--refresh", help="Ignore cached responses and ask JIRA again.")]
 
@@ -177,7 +186,7 @@ def candidate_find_command(
     k: Annotated[int, typer.Option("-k", min=1, max=50, help="How many candidates to return.")] = 20,
     as_json: Annotated[bool, typer.Option("--json", help="Write one JSON document to stdout.")] = False,
     no_sync: Annotated[bool, typer.Option("--no-sync", help="Search the index as it is, without asking JIRA.")] = False,
-    threads: ThreadsOption = None,
+    threads: FindThreadsOption = None,
     index_dir: IndexDirOption = None,
 ) -> None:
     """Suggest existing CBRD issues that a draft or an issue may duplicate. It suggests; it does not decide.
@@ -198,6 +207,7 @@ def candidate_find_command(
             k,
             sync=None if no_sync else sync,
             embedder=lambda: make_embedder(index, threads),
+            query_embedder=lambda: make_embedder(index, query_threads(threads)),
             clock=lambda: datetime.now().astimezone(),
             progress=progress,
         )

@@ -87,11 +87,20 @@ cubrid-jira-dup candidate-find draft.md --json > candidates.json
 
 ### 스레드
 
-임베딩은 기본으로 논리 CPU의 절반을 쓴다. `--threads N`으로 바꾼다. `candidate-find`와 `sync`, `eval candidates` 모두 이 옵션을 받는다.
+새 이슈 글을 임베딩할 때는 기본으로 논리 CPU의 절반을 쓴다. `--threads N`으로 바꾼다. `candidate-find`와 `sync`, `eval candidates` 모두 이 옵션을 받는다. `candidate-find`가 질의 하나를 임베딩할 때는 `--threads`와 4 중 작은 값을 쓴다. 짧은 글 하나는 스레드를 늘려도 거의 빨라지지 않고 CPU 시간만 는다.
 
 ```bash
 cubrid-jira-dup sync --threads 4
 ```
+
+numpy의 OpenBLAS는 스레드 1개로 돈다. 그대로 두면 import할 때 CPU마다 스레드를 띄워 헛돌린다. 바꾸려면 `OPENBLAS_NUM_THREADS`를 설정한다.
+
+2026-11-09에 개발 서버(논리 CPU 80개 중 0-39번)에서 `candidate-find CBRD-27756 --no-sync --json`을 세 번씩 잰 값이다. 바꾸기 전에는 질의 임베딩에 스레드 40개를 썼고 OpenBLAS 스레드 수도 제한하지 않았다.
+
+| | 사용자 CPU | 경과 시간 |
+|---|---|---|
+| 바꾸기 전 | 42.3-48.2초 | 7.6-7.9초 |
+| 바꾼 뒤 | 3.5-3.7초 | 3.5-3.6초 |
 
 ### 검색 방식
 

@@ -316,3 +316,24 @@ def test_the_first_run_builds_the_index_and_embeds_it(tmp_path, embedder, monkey
     assert "first run" in result.stderr
     assert "embedded 4/4" in result.stderr
     assert Index(tmp_path / "new").pending() == 0
+
+
+@pytest.mark.parametrize(
+    ("args", "bulk", "query"), [([], 40, 4), (["--threads", "12"], 12, 4), (["--threads", "2"], 2, 2)]
+)
+def test_new_texts_use_the_bulk_threads_and_the_query_at_most_four(tmp_path, monkeypatch, args, bulk, query):
+    monkeypatch.setattr(cli, "default_threads", lambda: 40)
+    fake = FakeEmbedder()
+    asked = []
+    monkeypatch.setattr(cli, "FastEmbedder", lambda models, threads: asked.append(threads) or fake)
+    index = Index(tmp_path / "index")
+    index.apply(ISSUES, at(200), [], replace_all=True)
+    result = runner.invoke(app, ["candidate-find", "CBRD-3", "--no-sync", "--index-dir", str(index.root), *args])
+    assert result.exit_code == 0, result.stderr
+    assert [len(call) for call in fake.calls] == [9, 2]
+    assert asked == [bulk, query]
+
+
+def test_find_help_says_the_query_uses_at_most_four_threads():
+    result = runner.invoke(app, ["candidate-find", "--help"])
+    assert "at most 4" in " ".join(result.output.split())
