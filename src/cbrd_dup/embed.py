@@ -16,7 +16,9 @@ MODEL_ID = "intfloat/multilingual-e5-small"
 MODEL_FILE = "onnx/model.onnx"
 DIM = 384
 MAX_CHARS = 4000
-BATCH = 32
+# A batch of 32 texts at 512 tokens held about 1.8 GB of attention buffers at peak; 8 holds a quarter of that and
+# embedded the corpus as fast on 16 threads (measured 2026-11-09).
+BATCH = 8
 QUERY_THREADS = 4
 
 
