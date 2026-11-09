@@ -169,7 +169,9 @@ def test_a_draft_file_gives_one_json_document_on_stdout(index, tmp_path):
     assert result.exit_code == 0, result.stderr
     document = json.loads(result.stdout)
     assert document["schema"] == "cubrid-jira-dup/candidates/1"
-    assert document["query"] == {"source": "draft", "key": None, "title": "Crash in heap_update during vacuum"}
+    query = document["query"]
+    assert (query["source"], query["key"], query["title"]) == ("draft", None, "Crash in heap_update during vacuum")
+    assert (query["time"], query["time_reference"]) == (document["started_at"], "now")
     assert (document["k"], document["complete"], document["errors"]) == (3, True, [])
     assert document["index"]["issues"] == 4
     assert set(document["timings_ms"]) == {"sync", "load", "embed", "search", "total"}
@@ -199,10 +201,29 @@ def test_an_issue_key_in_any_case_searches_with_its_text_and_excludes_itself(ind
     result = find(index, "cbrd-3", "--no-sync", "--json")
     assert result.exit_code == 0, result.stderr
     document = json.loads(result.stdout)
-    assert document["query"] == {"source": "key", "key": "CBRD-3", "title": "vacuum heap crash"}
+    query = document["query"]
+    assert (query["source"], query["key"], query["title"]) == ("key", "CBRD-3", "vacuum heap crash")
     keys = [c["key"] for c in document["candidates"]]
     assert "CBRD-3" not in keys
     assert keys[0] == "CBRD-1"
+
+
+def test_an_issue_key_counts_recency_from_when_it_was_filed_in_both_directions(tmp_path, embedder):
+    day = 86400
+    issues = [
+        issue("CBRD-1", at(0), "replication lag"),
+        issue("CBRD-2", at(730 * day), "replication lag"),
+        issue("CBRD-3", at(-3 * day), "replication lag"),
+    ]
+    index = build_index(tmp_path / "index", issues, embedder)
+    result = find(index, "CBRD-1", "--no-sync", "--json")
+    assert result.exit_code == 0, result.stderr
+    document = json.loads(result.stdout)
+    assert (document["query"]["time"], document["query"]["time_reference"]) == (at(0).isoformat(), "issue created")
+    candidates = document["candidates"]
+    assert [c["key"] for c in candidates] == ["CBRD-3", "CBRD-2"]
+    assert [c["signals"]["created_days_before"] for c in candidates] == [3.0, -730.0]
+    assert "730.0 days after" in find(index, "CBRD-1", "--no-sync").stdout
 
 
 def test_text_output_lists_the_keys_in_rank_order(index):

@@ -134,25 +134,34 @@ def find(
         index.embed_pending(model, progress)
     synced = time.perf_counter()
 
+    query_time = started_at
     if source.kind == "key":
         found = index.issues([source.key])
         if not found:
             raise InputError(f"{source.key} is not in the index")
         source = Source("key", found[0].summary, found[0].description, source.key)
-    searcher = Searcher(index, METHOD, model, clock=lambda: started_at)
+        # Recency counts from when the issue was filed, so issues filed just before or after it are near.
+        query_time = found[0].created
+    searcher = Searcher(index, METHOD, model, clock=lambda: query_time)
     loaded = time.perf_counter()
     ranking = searcher.rank(Query(source.title, source.body, None, source.key), k)
     by_key = {issue.key: issue for issue in index.issues(ranking.keys)}
     query_text = f"{source.title}\n\n{source.body}"
     candidates = [
-        candidate_record(rank, by_key[key], ranking, query_text, started_at)
+        candidate_record(rank, by_key[key], ranking, query_text, query_time)
         for rank, key in enumerate(ranking.keys, 1)
     ]
     finished = time.perf_counter()
 
     return {
         "schema": SCHEMA,
-        "query": {"source": source.kind, "key": source.key, "title": source.title},
+        "query": {
+            "source": source.kind,
+            "key": source.key,
+            "title": source.title,
+            "time": query_time.isoformat(),
+            "time_reference": "issue created" if source.kind == "key" else "now",
+        },
         "k": k,
         "started_at": started_at.isoformat(),
         "finished_at": clock().isoformat(),
@@ -192,10 +201,11 @@ def text_report(document: dict) -> str:
             for field, label in (("shared_identifiers", "identifiers"), ("shared_error_codes", "error codes"))
             if s[field]
         )
+        days = s["created_days_before"]
         lines += [
             "",
             f"{c['rank']}. {c['key']} [{c['status']} / {c['resolution'] or 'Unresolved'}] {c['summary']}",
-            f"   {c['url']}  created {c['created'][:10]} ({s['created_days_before']} days before)",
+            f"   {c['url']}  created {c['created'][:10]} ({abs(days)} days {'before' if days >= 0 else 'after'})",
             f"   signals: {ranks}{extra}",
         ]
     return "\n".join(lines) + "\n"

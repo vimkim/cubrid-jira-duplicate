@@ -16,7 +16,7 @@ summed over the query tokens with repetition. N, df, and avgdl count every store
 statistics do not depend on the query time.
 
 The method fuses the top `depth` issues of each channel with weighted reciprocal rank fusion and adds a
-boost for issues created shortly before the query time. Ties go to the lower key number.
+boost for issues created near the query time, before or after it. Ties go to the lower key number.
 """
 
 import math
@@ -137,7 +137,7 @@ class Searcher:
         fused[fused == 0] = NEG
         if m.recency:
             anchor = (query.before or self.clock()).timestamp()
-            age_days = np.maximum(anchor - a.created, 0) / DAY
+            age_days = np.abs(anchor - a.created) / DAY
             fused += m.recency / (1 + age_days / m.recency_days) / (m.rrf_k + 1)
         keys = [a.keys[i] for i in top(fused, k)]
         timings = {"embed": (embedded - started) * 1000, "search": (time.perf_counter() - embedded) * 1000}
