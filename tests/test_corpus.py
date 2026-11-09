@@ -127,6 +127,48 @@ def test_first_sync_fetches_everything_and_a_second_fetches_only_the_recent_chan
     assert all("authorization" not in r.headers for r in jira.requests)
 
 
+def test_an_incomplete_sync_keeps_the_last_complete_start_and_the_next_sync_refetches_everything(tmp_path):
+    third = datetime(2026, 11, 9, 12, 0, 0, tzinfo=UTC)
+    fourth = datetime(2026, 11, 9, 13, 0, 0, tzinfo=UTC)
+    after_third = 'project = CBRD AND updated >= "2026-11-09 20:50" ORDER BY key ASC'
+    idx = Index(tmp_path)
+    jira = FakeJira()
+    everything = [raw_issue("CBRD-1", at(0)), raw_issue("CBRD-2", at(1))]
+    jira.pages[FULL] = everything
+    jira.pages[INCREMENTAL] = [raw_issue("CBRD-2", at(1), summary="edited", total=3)]
+    jira.pages[after_third] = []
+
+    def sync_at(when):
+        with jira.client(idx) as client:
+            return corpus.sync(client, idx, when)
+
+    assert sync_at(FIRST).state.complete
+
+    incomplete = sync_at(SECOND).state
+    assert not incomplete.complete
+    assert idx.state().synced_at == FIRST
+    assert idx.attempted_at() == SECOND
+
+    assert sync_at(third).state.synced_at == third
+    assert idx.attempted_at() == third
+    assert sync_at(fourth).state.synced_at == fourth
+    assert jira.jqls == [FULL, INCREMENTAL, FULL, after_third]
+
+
+def test_a_first_sync_that_is_incomplete_has_no_complete_start_and_the_next_sync_fetches_everything(tmp_path):
+    idx = Index(tmp_path)
+    jira = FakeJira()
+    jira.pages[FULL] = [raw_issue("CBRD-1", at(0), total=3)]
+    with jira.client(idx) as client:
+        state = corpus.sync(client, idx, FIRST).state
+    assert idx.exists()
+    assert (state.synced_at, state.complete, idx.attempted_at()) == (None, False, FIRST)
+    jira.pages[FULL] = [raw_issue("CBRD-1", at(0))]
+    with jira.client(idx) as client:
+        assert corpus.sync(client, idx, SECOND).state.synced_at == SECOND
+    assert jira.jqls == [FULL, FULL]
+
+
 def test_syncing_twice_converges_to_the_same_snapshot(tmp_path):
     idx = Index(tmp_path)
     jira = FakeJira()

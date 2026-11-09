@@ -273,10 +273,11 @@ def report(
     tables = metric_rows(run, pairs, sides, baseline_results)
     counts = split_counts(pairs, sides)
     latencies = sorted(run.latencies_ms.values())
+    synced_at = snapshot.synced_at.isoformat() if snapshot.synced_at else "never"
     out = [
         f"# Candidate recall: {run.name}",
         "",
-        f"Snapshot: {snapshot.issues} issues, synced_at {snapshot.synced_at.isoformat()},"
+        f"Snapshot: {snapshot.issues} issues, synced_at {synced_at},"
         f" complete {snapshot.complete}, issue data sha256 {snapshot.sha256}",
         "",
         f"Pairs are the gold pairs whose candidate was created before the duplicate. Split seed {SEED}.",

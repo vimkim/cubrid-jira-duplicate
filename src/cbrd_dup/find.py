@@ -177,7 +177,7 @@ def find(
         "index": {
             "path": str(index.root),
             "issues": state.issues,
-            "synced_at": state.synced_at.isoformat(),
+            "synced_at": state.synced_at.isoformat() if state.synced_at else None,
             "last_sync_attempt": attempt.isoformat() if (attempt := index.attempted_at()) else None,
             "complete": state.complete,
         },

@@ -359,7 +359,19 @@ def test_a_failed_sync_searches_the_existing_index_and_exits_2(index, monkeypatc
     assert "sync failed" in document["errors"][0]
     assert document["candidates"][0]["key"] == "CBRD-1"
     assert document["index"]["last_sync_attempt"] is not None
+    assert document["index"]["synced_at"] == at(200).isoformat()
     assert "sync failed" in result.stderr
+
+
+def test_an_incomplete_sync_reports_the_last_complete_start_apart_from_the_attempt(index, monkeypatch):
+    page = {"total": 1, "issues": [raw_issue("CBRD-5", at(40), summary="loaddb hangs", total=3)]}
+    use_jira(monkeypatch, lambda request: httpx.Response(200, json=page))
+    result = find(index, "CBRD-3", "--json")
+    assert result.exit_code == 2
+    document = json.loads(result.stdout)["index"]
+    assert document["complete"] is False
+    assert document["synced_at"] == at(200).isoformat()
+    assert document["last_sync_attempt"] > document["synced_at"]
 
 
 def test_a_reply_that_is_not_json_searches_the_existing_index_and_exits_2(index, monkeypatch):

@@ -42,7 +42,7 @@ create table if not exists titles_postings(term text primary key, docs blob not 
 
 
 class SyncState(BaseModel):
-    synced_at: datetime
+    synced_at: datetime | None
     complete: bool
     issues: int
     errors: list[str]
@@ -51,7 +51,7 @@ class SyncState(BaseModel):
 class Snapshot(BaseModel):
 
     issues: int
-    synced_at: datetime
+    synced_at: datetime | None
     complete: bool
     sha256: str
 
@@ -193,12 +193,13 @@ class Index:
     def state(self) -> SyncState | None:
         if not self.path.exists():
             return None
-        synced_at = self._meta("synced_at")
-        if synced_at is None:
+        complete = self._meta("complete")
+        if complete is None:
             return None
+        synced_at = self._meta("synced_at")
         return SyncState(
-            synced_at=datetime.fromisoformat(synced_at),
-            complete=self._meta("complete") == "1",
+            synced_at=datetime.fromisoformat(synced_at) if synced_at else None,
+            complete=complete == "1",
             issues=self.db.execute("select count(*) from issues").fetchone()[0],
             errors=json.loads(self._meta("errors") or "[]"),
         )
@@ -227,7 +228,8 @@ class Index:
                         self._delete(key)
                         changed += 1
             postings.write()
-            self._set_meta("synced_at", synced_at.isoformat())
+            if not errors:
+                self._set_meta("synced_at", synced_at.isoformat())
             self._set_meta("complete", "1" if not errors else "0")
             self._set_meta("errors", json.dumps(errors, ensure_ascii=False))
         return changed
