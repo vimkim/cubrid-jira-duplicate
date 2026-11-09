@@ -2,7 +2,18 @@ import re
 
 import pytest
 
-from cbrd_dup.text import SPECIAL, has_hangul, mask_keys, summary_words, text_search_jql, tokenize
+from cbrd_dup.text import (
+    SPECIAL,
+    error_codes,
+    has_hangul,
+    identifiers,
+    mask_key_identifiers,
+    mask_keys,
+    stack_functions,
+    summary_words,
+    text_search_jql,
+    tokenize,
+)
 
 
 @pytest.mark.parametrize(
@@ -80,3 +91,33 @@ def test_tokenize(text, tokens):
 
 def test_masked_key_adds_no_search_tokens():
     assert tokenize(mask_keys("vacuum CBRD-123 crash")) == tokenize("vacuum crash")
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["cbrd_27516", "CBRD_27516", "cbrd27516", "CBRD-27516", "db25833", "db_25833", "/home/qa/cbrd_27516/x.sql"],
+)
+def test_mask_key_identifiers_hides_identifiers_named_after_an_issue(text):
+    masked = mask_key_identifiers(f"run {text} now")
+    assert not re.search(r"\d{5}", masked)
+    assert tokenize(masked)[0] == "run" and tokenize(masked)[-1] == "now"
+
+
+@pytest.mark.parametrize("text", ["testdb1", "db123", "mydb25833", "db258330", "OTHER-27516"])
+def test_mask_key_identifiers_keeps_identifiers_that_do_not_name_an_issue(text):
+    assert mask_key_identifiers(text) == text
+
+
+def test_stack_functions_take_the_first_distinct_frames_after_the_signal_noise():
+    stack = "#0 0x1 in raise () from libc\n#1 0x2 in abort ()\n  #2 0x3 in heap_update (a=1)\n#3 heap_update ()\n"
+    stack += "#4 qexec_run ()"
+    assert stack_functions(stack) == ["heap_update", "qexec_run"]
+    assert stack_functions(stack, 1) == ["heap_update"]
+    assert stack_functions("call heap_update (x) here") == []
+
+
+def test_identifiers_and_error_codes_in_order_of_first_appearance():
+    text = "heap_file.c: heap_update_home failed with ER_HEAP_UNKNOWN_OBJECT (-1114) in QueryExecutor; heap_update_home"
+    assert identifiers(text) == ["heap_file.c", "heap_update_home", "ER_HEAP_UNKNOWN_OBJECT", "QueryExecutor"]
+    assert error_codes(text) == ["ER_HEAP_UNKNOWN_OBJECT", "-1114"]
+    assert error_codes("dates 2026-11-09 and ranges 0-2 are not codes") == []
