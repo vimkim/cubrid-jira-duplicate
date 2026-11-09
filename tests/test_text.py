@@ -76,3 +76,7 @@ def test_masked_text_cannot_match_a_key():
 )
 def test_tokenize(text, tokens):
     assert tokenize(text) == tokens
+
+
+def test_masked_key_adds_no_search_tokens():
+    assert tokenize(mask_keys("vacuum CBRD-123 crash")) == tokenize("vacuum crash")

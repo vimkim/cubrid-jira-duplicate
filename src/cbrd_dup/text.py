@@ -11,7 +11,7 @@ SPECIAL = re.compile(r'[+\-&|!(){}\[\]^"~*?:\\/]')
 OPERATORS = {"AND", "OR", "NOT", "TO"}
 
 ISSUE_KEY = re.compile(r"CBRD-\d+", re.IGNORECASE)
-KEY_PLACEHOLDER = "[issue-key]"
+KEY_PLACEHOLDER = "#"
 TOKEN_RUN = re.compile(r"[a-z0-9_]+|[가-힣ㄱ-ㅎㅏ-ㅣ]+")
 
 Variant = Literal["and", "or"]
