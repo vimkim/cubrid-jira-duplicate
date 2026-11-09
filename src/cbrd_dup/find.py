@@ -88,9 +88,10 @@ def shared(found: list[str], candidate: list[str]) -> list[str]:
 
 def candidate_record(rank: int, issue: Issue, ranking: Ranking, query_text: str, at: datetime) -> dict:
     text = "\n\n".join([issue.summary, issue.description, *(c.body for c in issue.comments)])
+    # Adding 0.0 turns a rounded -0.0 into 0.0, so JSON never carries a negative zero.
     signals: dict = {name: ranking.channel_ranks.get(ch, {}).get(issue.key) for ch, name in CHANNEL_SIGNALS.items()}
     signals |= {
-        "created_days_before": round((at - issue.created).total_seconds() / DAY, 1),
+        "created_days_before": round((at - issue.created).total_seconds() / DAY, 1) + 0.0,
         "shared_identifiers": shared(identifiers(query_text), identifiers(text)),
         "shared_error_codes": shared(error_codes(query_text), error_codes(text)),
     }
@@ -207,11 +208,12 @@ def text_report(document: dict) -> str:
             for field, label in (("shared_identifiers", "identifiers"), ("shared_error_codes", "error codes"))
             if s[field]
         )
-        days = s["created_days_before"]
+        days = abs(s["created_days_before"])
+        side = "after" if datetime.fromisoformat(c["created"]) > datetime.fromisoformat(query["time"]) else "before"
         lines += [
             "",
             f"{c['rank']}. {c['key']} [{c['status']} / {c['resolution'] or 'Unresolved'}] {c['summary']}",
-            f"   {c['url']}  created {c['created'][:10]} ({abs(days)} days {'before' if days >= 0 else 'after'})",
+            f"   {c['url']}  created {c['created'][:10]} ({days} days {side})",
             f"   signals: {ranks}{extra}",
         ]
     return "\n".join(lines) + "\n"

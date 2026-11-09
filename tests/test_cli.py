@@ -227,6 +227,25 @@ def test_an_issue_key_counts_recency_from_when_it_was_filed_in_both_directions(t
     assert "730.0 days after" in find(index, "CBRD-1", "--no-sync").stdout
 
 
+def test_an_issue_filed_minutes_after_the_key_is_after_it_and_never_negative_zero(tmp_path, embedder):
+    issues = [
+        issue("CBRD-1", at(0), "replication lag"),
+        issue("CBRD-2", at(60), "replication lag"),
+        issue("CBRD-3", at(-60), "replication lag"),
+    ]
+    index = build_index(tmp_path / "index", issues, embedder)
+    raw = find(index, "CBRD-1", "--no-sync", "--json").stdout
+    candidates = json.loads(raw)["candidates"]
+    assert sorted(c["key"] for c in candidates) == ["CBRD-2", "CBRD-3"]
+    assert [c["signals"]["created_days_before"] for c in candidates] == [0.0, 0.0]
+    assert "-0.0" not in raw
+    text = find(index, "CBRD-1", "--no-sync").stdout.splitlines()
+    after = next(line for line in text if "browse/CBRD-2" in line)
+    before = next(line for line in text if "browse/CBRD-3" in line)
+    assert "(0.0 days after)" in after
+    assert "(0.0 days before)" in before
+
+
 def test_text_output_lists_the_keys_in_rank_order(index):
     as_json = json.loads(find(index, "CBRD-3", "--no-sync", "--json").stdout)
     result = find(index, "CBRD-3", "--no-sync")
