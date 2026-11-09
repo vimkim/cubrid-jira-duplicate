@@ -87,7 +87,7 @@ cubrid-jira-dup candidate-find draft.md --json > candidates.json
 
 ### 스레드
 
-새 이슈 글을 임베딩할 때는 기본으로 논리 CPU의 절반을 쓴다. `--threads N`으로 바꾼다. `candidate-find`와 `sync`, `eval candidates` 모두 이 옵션을 받는다. `candidate-find`가 질의 하나를 임베딩할 때는 `--threads`와 4 중 작은 값을 쓴다. 짧은 글 하나는 스레드를 늘려도 거의 빨라지지 않고 CPU 시간만 는다.
+새 이슈 글을 임베딩할 때는 기본으로 논리 CPU의 절반을 쓴다. `--threads N`으로 바꾼다. `candidate-find`와 `sync`, `eval candidates` 모두 이 옵션을 받는다. `candidate-find`가 질의 하나를 임베딩할 때는 `--threads`와 4 중 작은 값을 쓴다. 짧은 글 하나는 스레드를 늘려도 거의 빨라지지 않고 CPU 시간만 는다. 동기화로 새로 생긴 글이 32개 이하이면 그 글도 질의와 같은 모델로 임베딩한다. 모델을 하나 더 올리는 데 약 2초가 들기 때문이다.
 
 ```bash
 cubrid-jira-dup sync --threads 4

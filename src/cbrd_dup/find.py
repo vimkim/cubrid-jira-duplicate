@@ -24,6 +24,8 @@ METHOD = METHODS["hybrid"]
 ISSUE_KEY = re.compile(r"cbrd-(\d+)", re.IGNORECASE)
 MAX_SHARED = 8
 DRAFT_MAX_CHARS = 200_000
+# Up to this many new texts embed with the query's model: loading a second model costs about 2 s.
+FEW_PENDING = 32
 CHANNEL_SIGNALS = {"L": "lexical_rank", "D": "semantic_rank", "T": "title_rank", "S": "stack_rank"}
 
 
@@ -119,7 +121,8 @@ def find(
 ) -> dict:
     """Sync unless `sync` is None, embed what is missing with `embedder`, search, and return the JSON document.
 
-    `query_embedder` embeds the query; it can use fewer threads, as one short text gains little from more.
+    `query_embedder` embeds the query and up to FEW_PENDING new texts; it can use fewer threads, as one short
+    text gains little from more.
 
     Raises InputError for an unknown key and when there is no index to search.
     """
@@ -141,9 +144,10 @@ def find(
     state = index.state()
     if not state.complete and sync is None:
         errors += state.errors or ["the last sync was incomplete"]
-    if index.pending():
-        progress(f"embedding {index.pending()} new texts")
-        index.embed_pending(embedder(), progress)
+    query_model = query_embedder()
+    if pending := index.pending():
+        progress(f"embedding {pending} new texts")
+        index.embed_pending(embedder() if pending > FEW_PENDING else query_model, progress)
     synced = time.perf_counter()
 
     query_time = started_at
@@ -154,7 +158,7 @@ def find(
         source = Source("key", found[0].summary, found[0].description, source.key)
         # Recency counts from when the issue was filed, so issues filed just before or after it are near.
         query_time = found[0].created
-    searcher = Searcher(index, METHOD, query_embedder(), clock=lambda: query_time)
+    searcher = Searcher(index, METHOD, query_model, clock=lambda: query_time)
     loaded = time.perf_counter()
     ranking = searcher.rank(Query(source.title, source.body, None, source.key), k)
     by_key = {issue.key: issue for issue in index.issues(ranking.keys)}
