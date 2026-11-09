@@ -3,11 +3,12 @@
 `<root>/index.db` holds:
 
 - `issues(key, number, created, updated, data)`: `data` is the `Issue` as JSON, times are epoch seconds.
-- `rows(id, key, ordinal, kind, issue_created, written, digest, vector)`: `corpus.rows(issue)[ordinal]`.
+- `rows(id, key, ordinal, kind, issue_created, written, digest, tokens, vector)`: `corpus.rows(issue)[ordinal]`.
   `digest` hashes the row text, so a sync keeps the vector of an unchanged row; `vector` is NULL until embedded.
-- `titles(key, digest, vector)`: the summary vector of each issue.
-- `rows_fts` and `titles_fts`: FTS5 over the `text.tokenize` tokens of each row and summary, keyed by
-  `rows.id` and the issue number.
+  `tokens` counts the `text.tokenize` tokens of the row.
+- `titles(key, digest, tokens, vector)`: the summary of each issue, its token count, and its vector.
+- `rows_postings` and `titles_postings`: per `text.tokenize` term, the documents that contain it as packed
+  int32 arrays: `docs` holds `rows.id` or the issue number, `tfs` how often the term occurs there.
 - `meta(name, value)`: schema version, embedding model, and the sync state.
 
 `<root>/models/` caches the embedding model and `<root>/raw/` the JIRA responses of the last syncs.
@@ -18,11 +19,13 @@ import json
 import os
 import sqlite3
 import time
-from collections import Counter
-from collections.abc import Callable, Iterable
+from array import array
+from collections import Counter, defaultdict
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import Literal
 
 import numpy as np
 from pydantic import BaseModel
@@ -33,25 +36,24 @@ from cbrd_dup.jira import key_number
 from cbrd_dup.text import tokenize
 
 # Bump when the tables or `text.tokenize` change: an index of another version is rebuilt by the next sync.
-SCHEMA = "1"
+SCHEMA = "2"
 HOME_ENV = "CUBRID_JIRA_DUP_HOME"
-FTS = "fts5(tokens, content='', contentless_delete=1, tokenize=\"unicode61 remove_diacritics 0 tokenchars '_'\")"
-# One FTS5 query costs about (rows matched) x (query terms); summing chunks of terms gives the same BM25 faster.
-CHUNK_TERMS = 32
 EMBED_CHUNK = 512
+Field = Literal["rows", "titles"]
+FIELDS: tuple[Field, ...] = ("rows", "titles")
 
-TABLES = f"""
+TABLES = """
 create table if not exists meta(name text primary key, value text not null);
 create table if not exists issues(
     key text primary key, number integer not null unique, created real not null, updated real not null,
     data text not null);
 create table if not exists rows(
     id integer primary key, key text not null, ordinal integer not null, kind text not null,
-    issue_created real not null, written real not null, digest text not null, vector blob);
+    issue_created real not null, written real not null, digest text not null, tokens integer not null, vector blob);
 create index if not exists rows_by_key on rows(key);
-create table if not exists titles(key text primary key, digest text not null, vector blob);
-create virtual table if not exists rows_fts using {FTS};
-create virtual table if not exists titles_fts using {FTS};
+create table if not exists titles(key text primary key, digest text not null, tokens integer not null, vector blob);
+create table if not exists rows_postings(term text primary key, docs blob not null, tfs blob not null) without rowid;
+create table if not exists titles_postings(term text primary key, docs blob not null, tfs blob not null) without rowid;
 """
 
 
@@ -81,8 +83,10 @@ class Arrays:
     row_issue: np.ndarray
     row_created: np.ndarray
     row_written: np.ndarray
+    row_tokens: np.ndarray
     row_vectors: np.ndarray
     row_embedded: np.ndarray
+    title_tokens: np.ndarray
     title_vectors: np.ndarray
     title_embedded: np.ndarray
 
@@ -106,11 +110,65 @@ def epoch(when: datetime) -> float:
     return when.timestamp()
 
 
+def schema_of(db: sqlite3.Connection) -> str | None:
+    if db.execute("select 1 from sqlite_master where name = 'meta'").fetchone() is None:
+        return None
+    found = db.execute("select value from meta where name = 'schema'").fetchone()
+    return found[0] if found else None
+
+
 def vectors_of(blobs: list[bytes | None]) -> tuple[np.ndarray, np.ndarray]:
     present = np.array([b is not None for b in blobs], bool)
     empty = bytes(4 * DIM)
     joined = b"".join(empty if b is None else b for b in blobs)
     return np.frombuffer(joined, np.float32).reshape(len(blobs), DIM), present
+
+
+class Postings:
+    """The posting changes of one sync, written in `write` with one read and one write per touched term.
+
+    With `rebuild`, `write` starts from no postings instead of the stored ones, so only additions matter.
+    """
+
+    def __init__(self, db: sqlite3.Connection, rebuild: bool):
+        self.db, self.rebuild = db, rebuild
+        self.removed: dict[Field, set[int]] = {f: set() for f in FIELDS}
+        self.touched: dict[Field, set[str]] = {f: set() for f in FIELDS}
+        self.added: dict[Field, defaultdict[str, tuple[array, array]]] = {
+            f: defaultdict(lambda: (array("i"), array("i"))) for f in FIELDS
+        }
+
+    def remove(self, field: Field, doc: int, tokens: list[str]) -> None:
+        self.removed[field].add(doc)
+        self.touched[field].update(tokens)
+
+    def add(self, field: Field, doc: int, tokens: list[str]) -> None:
+        for term, tf in Counter(tokens).items():
+            docs, tfs = self.added[field][term]
+            docs.append(doc)
+            tfs.append(tf)
+
+    def write(self) -> None:
+        empty = np.zeros(0, np.int32)
+        for field in FIELDS:
+            table = f"{field}_postings"
+            if self.rebuild:
+                self.db.execute(f"delete from {table}")
+            removed = np.fromiter(self.removed[field], np.int32)
+            added = self.added[field]
+            for term in self.touched[field] | added.keys():
+                found = self.db.execute(f"select docs, tfs from {table} where term = ?", (term,)).fetchone()
+                docs, tfs = (np.frombuffer(blob, np.int32) for blob in found) if found else (empty, empty)
+                keep = ~np.isin(docs, removed)
+                new_docs, new_tfs = added.get(term, (empty, empty))
+                docs = np.concatenate([docs[keep], np.asarray(new_docs, np.int32)])
+                tfs = np.concatenate([tfs[keep], np.asarray(new_tfs, np.int32)])
+                if docs.size:
+                    self.db.execute(
+                        f"insert or replace into {table} values (?, ?, ?)", (term, docs.tobytes(), tfs.tobytes())
+                    )
+                else:
+                    self.db.execute(f"delete from {table} where term = ?", (term,))
 
 
 class Index:
@@ -128,27 +186,24 @@ class Index:
     def db(self) -> sqlite3.Connection:
         if self._db is None:
             self.root.mkdir(parents=True, exist_ok=True)
-            self._db = sqlite3.connect(self.path)
-            self._db.execute("pragma synchronous = normal")
-            with self._db:
-                self._db.executescript(TABLES)
-            if self._meta("schema") not in (None, SCHEMA):
-                self._reset()
-            with self._db:
-                self._set_meta("schema", SCHEMA)
+            db = sqlite3.connect(self.path)
+            if schema_of(db) not in (None, SCHEMA):
+                # Another version: start empty, so the next sync fetches and indexes every issue again.
+                db.close()
+                for path in (self.path, self.path.with_name(self.path.name + "-journal")):
+                    path.unlink(missing_ok=True)
+                db = sqlite3.connect(self.path)
+            db.execute("pragma synchronous = normal")
+            with db:
+                db.executescript(TABLES)
+                db.execute("insert or replace into meta values ('schema', ?)", (SCHEMA,))
+            self._db = db
         return self._db
 
     def close(self) -> None:
         if self._db is not None:
             self._db.close()
             self._db = None
-
-    def _reset(self) -> None:
-        """Drop everything, so the next sync fetches and indexes every issue again."""
-        with self._db:
-            for table in ("meta", "issues", "rows", "titles", "rows_fts", "titles_fts"):
-                self._db.execute(f"drop table {table}")
-            self._db.executescript(TABLES)
 
     def _meta(self, name: str) -> str | None:
         found = self.db.execute("select value from meta where name = ?", (name,)).fetchone()
@@ -183,69 +238,77 @@ class Index:
     def apply(self, issues: Iterable[Issue], synced_at: datetime, errors: list[str], replace_all: bool) -> int:
         """Store fetched issues and the new sync state in one transaction; returns how many issues changed.
 
-        With `replace_all`, issues missing from `issues` are dropped. An unchanged issue keeps its rows.
+        With `replace_all`, issues missing from `issues` are dropped and the postings are rebuilt from scratch.
+        An unchanged issue keeps its rows.
         """
         changed = 0
         with self.db:
+            postings = Postings(self.db, rebuild=replace_all)
             fetched = set()
             for issue in issues:
+                # A second copy in one sync would enter the postings twice; the next sync refetches a newer one.
+                if issue.key in fetched:
+                    continue
                 fetched.add(issue.key)
-                changed += self._put(issue)
+                changed += self._put(issue, postings)
             if replace_all:
                 for (key,) in self.db.execute("select key from issues").fetchall():
                     if key not in fetched:
                         self._delete(key)
                         changed += 1
+            postings.write()
             self._set_meta("synced_at", synced_at.isoformat())
             self._set_meta("complete", "1" if not errors else "0")
             self._set_meta("errors", json.dumps(errors, ensure_ascii=False))
         return changed
 
-    def _put(self, issue: Issue) -> bool:
+    def _put(self, issue: Issue, postings: Postings) -> bool:
         data = issue.model_dump_json()
-        old = self.db.execute("select data from issues where key = ?", (issue.key,)).fetchone()
-        if old is not None and old[0] == data:
-            return False
         number = key_number(issue.key)
+        old = self.db.execute("select data from issues where key = ?", (issue.key,)).fetchone()
+        old_rows = self.db.execute("select id, digest, vector from rows where key = ? order by ordinal", (issue.key,))
+        old_rows = old_rows.fetchall()
+        if old is not None and old[0] == data:
+            if postings.rebuild:
+                for (row_id, _, _), row in zip(old_rows, rows(issue), strict=True):
+                    postings.add("rows", row_id, tokenize(row.text))
+                postings.add("titles", number, tokenize(issue.summary))
+            return False
         self.db.execute(
             "insert into issues values (?, ?, ?, ?, ?) on conflict(key) do update set"
             " created = excluded.created, updated = excluded.updated, data = excluded.data",
             (issue.key, number, epoch(issue.created), epoch(issue.updated), data),
         )
-        kept = {}
-        for row_id, row_digest, vector in self.db.execute(
-            "select id, digest, vector from rows where key = ?", (issue.key,)
-        ).fetchall():
-            if vector is not None:
-                kept[row_digest] = vector
-            self.db.execute("delete from rows_fts where rowid = ?", (row_id,))
+        if old is not None and not postings.rebuild:
+            previous = Issue.model_validate_json(old[0])
+            for (row_id, _, _), row in zip(old_rows, rows(previous), strict=True):
+                postings.remove("rows", row_id, tokenize(row.text))
+            postings.remove("titles", number, tokenize(previous.summary))
+        kept = {row_digest: vector for _, row_digest, vector in old_rows if vector is not None}
         self.db.execute("delete from rows where key = ?", (issue.key,))
         for ordinal, row in enumerate(rows(issue)):
             row_digest = digest(row.text)
+            tokens = tokenize(row.text)
             cursor = self.db.execute(
-                "insert into rows (key, ordinal, kind, issue_created, written, digest, vector)"
-                " values (?, ?, ?, ?, ?, ?, ?)",
-                (issue.key, ordinal, row.kind, epoch(row.issue_created), epoch(row.written), row_digest)
+                "insert into rows (key, ordinal, kind, issue_created, written, digest, tokens, vector)"
+                " values (?, ?, ?, ?, ?, ?, ?, ?)",
+                (issue.key, ordinal, row.kind, epoch(row.issue_created), epoch(row.written), row_digest, len(tokens))
                 + (kept.get(row_digest),),
             )
-            self.db.execute(
-                "insert into rows_fts (rowid, tokens) values (?, ?)", (cursor.lastrowid, " ".join(tokenize(row.text)))
-            )
+            postings.add("rows", cursor.lastrowid, tokens)
+        title_tokens = tokenize(issue.summary)
+        postings.add("titles", number, title_tokens)
         title_digest = digest(issue.summary)
         old_title = self.db.execute("select digest from titles where key = ?", (issue.key,)).fetchone()
         if old_title is None or old_title[0] != title_digest:
-            self.db.execute("insert or replace into titles values (?, ?, NULL)", (issue.key, title_digest))
-            self.db.execute("delete from titles_fts where rowid = ?", (number,))
             self.db.execute(
-                "insert into titles_fts (rowid, tokens) values (?, ?)", (number, " ".join(tokenize(issue.summary)))
+                "insert or replace into titles values (?, ?, ?, NULL)", (issue.key, title_digest, len(title_tokens))
             )
         return True
 
     def _delete(self, key: str) -> None:
-        for (row_id,) in self.db.execute("select id from rows where key = ?", (key,)).fetchall():
-            self.db.execute("delete from rows_fts where rowid = ?", (row_id,))
+        """Only a full sync deletes, and it rebuilds the postings, so they need no removal here."""
         self.db.execute("delete from rows where key = ?", (key,))
-        self.db.execute("delete from titles_fts where rowid = ?", (key_number(key),))
         self.db.execute("delete from titles where key = ?", (key,))
         self.db.execute("delete from issues where key = ?", (key,))
 
@@ -288,10 +351,11 @@ class Index:
         issues = self.db.execute("select key, created from issues order by number").fetchall()
         keys = [key for key, _ in issues]
         position = {key: n for n, key in enumerate(keys)}
-        found = self.db.execute("select id, key, issue_created, written, vector from rows order by id").fetchall()
-        row_vectors, row_embedded = vectors_of([r[4] for r in found])
-        titles = dict(self.db.execute("select key, vector from titles").fetchall())
-        title_vectors, title_embedded = vectors_of([titles.get(key) for key in keys])
+        found = self.db.execute("select id, key, issue_created, written, tokens, vector from rows order by id")
+        found = found.fetchall()
+        row_vectors, row_embedded = vectors_of([r[5] for r in found])
+        titles = {key: (n, vector) for key, n, vector in self.db.execute("select key, tokens, vector from titles")}
+        title_vectors, title_embedded = vectors_of([titles[key][1] for key in keys])
         return Arrays(
             keys=keys,
             created=np.array([c for _, c in issues], float),
@@ -299,31 +363,20 @@ class Index:
             row_issue=np.array([position[r[1]] for r in found], np.int64),
             row_created=np.array([r[2] for r in found], float),
             row_written=np.array([r[3] for r in found], float),
+            row_tokens=np.array([r[4] for r in found], np.int64),
             row_vectors=row_vectors,
             row_embedded=row_embedded,
+            title_tokens=np.array([titles[key][0] for key in keys], np.int64),
             title_vectors=title_vectors,
             title_embedded=title_embedded,
         )
 
-    def bm25(self, table: str, tokens: Iterable[str]) -> tuple[np.ndarray, np.ndarray]:
-        """FTS5 BM25 of each matching rowid of `rows_fts` or `titles_fts`, higher is better.
-
-        A token repeated n times in the query counts n times, as in the measured method. BM25 is a sum over
-        query terms, so terms are queried in groups of equal count and each group's sum is multiplied by it.
-        """
-        if table not in ("rows_fts", "titles_fts"):
-            raise ValueError(table)
-        by_count: dict[int, list[str]] = {}
-        for term, count in Counter(tokens).items():
-            by_count.setdefault(count, []).append(term)
-        scores: dict[int, float] = {}
-        query = f"select rowid, bm25({table}) from {table} where {table} match ?"
-        for count, terms in by_count.items():
-            for start in range(0, len(terms), CHUNK_TERMS):
-                match = " OR ".join(f'"{t}"' for t in terms[start : start + CHUNK_TERMS])
-                for rowid, score in self.db.execute(query, (match,)):
-                    scores[rowid] = scores.get(rowid, 0.0) - count * score
-        return np.fromiter(scores.keys(), np.int64, len(scores)), np.fromiter(scores.values(), float, len(scores))
+    def postings(self, field: Field, terms: Iterable[str]) -> Iterator[tuple[str, np.ndarray, np.ndarray]]:
+        """(term, documents, term frequencies) of each of `terms` that occurs in `field`."""
+        for term in terms:
+            found = self.db.execute(f"select docs, tfs from {field}_postings where term = ?", (term,)).fetchone()
+            if found:
+                yield term, np.frombuffer(found[0], np.int32), np.frombuffer(found[1], np.int32)
 
     # ---- embedding
 

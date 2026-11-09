@@ -1,12 +1,18 @@
+import math
+import sqlite3
 from datetime import UTC, datetime
 
 import httpx
+import numpy as np
+import pytest
 from factories import FakeEmbedder, at, comment, issue, raw_issue
 
 from cbrd_dup import corpus, index
 from cbrd_dup.corpus import parse_issue, rows
 from cbrd_dup.index import Index
 from cbrd_dup.jira import JiraClient
+from cbrd_dup.search import METHODS, Searcher
+from cbrd_dup.text import tokenize
 
 
 def test_parse_issue_keeps_seconds_and_turns_nulls_into_empty_values():
@@ -89,6 +95,14 @@ def keys(index: Index) -> list[str]:
     return [i.key for i in index.issues()]
 
 
+def lexical(idx: Index, words: str) -> tuple[np.ndarray, np.ndarray]:
+    """BM25 of every row, ordered by (issue, ordinal), and of every summary, in issue order."""
+    searcher = Searcher(idx, METHODS["bm25"])
+    a = searcher.arrays
+    by_row = searcher.bm25("rows", tokenize(words))[np.lexsort((a.row_ids, a.row_issue))]
+    return by_row, searcher.bm25("titles", tokenize(words))
+
+
 def test_first_sync_fetches_everything_and_a_second_fetches_only_the_recent_changes(tmp_path):
     idx = Index(tmp_path)
     jira = FakeJira()
@@ -167,7 +181,7 @@ def test_full_sync_drops_issues_jira_no_longer_returns(tmp_path):
     with jira.client(idx) as client:
         corpus.sync(client, idx, SECOND, full=True)
     assert keys(idx) == ["CBRD-2"]
-    assert idx.bm25("titles_fts", ["gone"])[0].size == 0
+    assert not lexical(idx, "gone")[1].any()
 
 
 def test_snapshot_reports_the_state_and_the_data_hash(tmp_path):
@@ -201,8 +215,8 @@ def test_incremental_sync_replaces_a_changed_issue_and_embeds_only_changed_text(
     with jira.client(idx) as client:
         result = corpus.sync(client, idx, SECOND)
     assert result.changed == 1
-    assert idx.bm25("rows_fts", ["walrus"])[0].size == 0
-    assert idx.bm25("rows_fts", ["zebra"])[0].size == 1
+    assert not lexical(idx, "walrus")[0].any()
+    assert np.count_nonzero(lexical(idx, "zebra")[0]) == 1
     assert idx.pending() == 1
     embedder.calls.clear()
     assert idx.embed_pending(embedder) == 1
@@ -218,3 +232,80 @@ def test_a_new_embedding_model_reembeds_everything(tmp_path):
     other.model_id = "another-model"
     assert idx.embed_pending(other) == 2
     assert idx.model() == "another-model"
+
+
+def lucene(tf: int, df: int, n: int, length: int, avgdl: float) -> float:
+    idf = math.log(1 + (n - df + 0.5) / (df + 0.5))
+    return idf * tf / (tf + 1.5 * (0.25 + 0.75 * length / avgdl))
+
+
+def test_bm25_is_lucene_bm25_over_every_stored_row_and_counts_repeated_query_words(tmp_path):
+    idx = Index(tmp_path)
+    corpus_ = [issue("CBRD-1", at(0), "alpha alpha beta"), issue("CBRD-2", at(1), "beta gamma"), issue("CBRD-3", at(2))]
+    idx.apply(corpus_, FIRST, [], replace_all=True)
+    by_row, by_title = lexical(idx, "alpha beta beta")
+    # Three rows of 3, 2, and 0 tokens: N = 3, avgdl = 5 / 3. alpha is in one row, beta in two.
+    avgdl = 5 / 3
+    expected = [lucene(2, 1, 3, 3, avgdl) + 2 * lucene(1, 2, 3, 3, avgdl), 2 * lucene(1, 2, 3, 2, avgdl), 0]
+    assert by_row == pytest.approx(expected)
+    assert by_title == pytest.approx(expected)
+
+
+CHANGES = [
+    issue("CBRD-1", at(0), "heap crash", "in vacuum", [comment("a", "walrus remark", at(9))]),
+    issue("CBRD-2", at(1), "loaddb slow", "an hour", [comment("b", "same here", at(5))]),
+    issue("CBRD-3", at(2), "csql typo", "help text"),
+]
+CHANGED = [
+    issue("CBRD-1", at(0), "heap crash", "in vacuum", [comment("a", "zebra remark", at(9)), comment("c", "x", at(9))]),
+    issue("CBRD-2", at(1), "loaddb hangs", "an hour"),
+    issue("CBRD-4", at(3), "vacuum heap", "zebra"),
+]
+WORDS = ["heap", "zebra walrus", "loaddb hour hour", "vacuum heap crash typo", "same here"]
+
+
+def test_incremental_postings_score_exactly_like_a_fresh_build(tmp_path):
+    synced = Index(tmp_path / "synced")
+    synced.apply(CHANGES, FIRST, [], replace_all=True)
+    synced.apply(CHANGED, SECOND, [], replace_all=False)
+    fresh = Index(tmp_path / "fresh")
+    fresh.apply([CHANGES[2], *CHANGED], SECOND, [], replace_all=True)
+    for words in WORDS:
+        for got, want in zip(lexical(synced, words), lexical(fresh, words), strict=True):
+            assert got == pytest.approx(want), words
+
+
+def test_a_sync_that_fails_midway_leaves_the_previous_postings(tmp_path):
+    idx = Index(tmp_path)
+    idx.apply(CHANGES, FIRST, [], replace_all=True)
+    before = [lexical(idx, words) for words in WORDS]
+
+    def broken():
+        yield CHANGED[0]
+        raise RuntimeError("connection lost")
+
+    with pytest.raises(RuntimeError):
+        idx.apply(broken(), SECOND, [], replace_all=False)
+    for words, (rows_before, titles_before) in zip(WORDS, before, strict=True):
+        rows_after, titles_after = lexical(idx, words)
+        assert np.array_equal(rows_after, rows_before) and np.array_equal(titles_after, titles_before)
+    assert idx.state().synced_at == FIRST
+
+
+def test_an_index_of_another_version_is_rebuilt_by_the_next_sync(tmp_path):
+    old = sqlite3.connect(tmp_path / "index.db")
+    old.executescript(
+        "create table meta(name text primary key, value text not null);"
+        "insert into meta values ('schema', '1'), ('synced_at', '2026-11-09T00:00:00+00:00'), ('complete', '1');"
+        "create virtual table rows_fts using fts5(tokens);"
+    )
+    old.commit()
+    old.close()
+    idx = Index(tmp_path)
+    assert not idx.exists()
+    jira = FakeJira()
+    jira.pages[FULL] = [raw_issue("CBRD-1", at(0), summary="heap")]
+    with jira.client(idx) as client:
+        corpus.sync(client, idx, FIRST)
+    assert jira.jqls == [FULL]
+    assert lexical(idx, "heap")[1].tolist() == [pytest.approx(lucene(1, 1, 1, 1, 1))]

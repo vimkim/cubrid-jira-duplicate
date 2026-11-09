@@ -10,11 +10,18 @@ Each channel ranks issues on its own, after the time cutoff and the excluded key
 | TD | e5-small cosine of the summary for the query title |
 | S | BM25 of the best row for the top two call-stack function names of the query, if it has a stack |
 
+BM25 is Lucene's, as the measured bm25s library computes it, over the `text.tokenize` tokens of the whole
+index: idf = ln(1 + (N - df + 0.5) / (df + 0.5)), term score = idf * tf / (tf + k1 * (1 - b + b * dl / avgdl)),
+summed over the query tokens with repetition. N, df, and avgdl count every stored row (or summary), so the
+statistics do not depend on the query time.
+
 The method fuses the top `depth` issues of each channel with weighted reciprocal rank fusion and adds a
 boost for issues created shortly before the query time. Ties go to the lower key number.
 """
 
+import math
 import time
+from collections import Counter
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
@@ -23,13 +30,15 @@ import numpy as np
 
 from cbrd_dup.embed import Embedder, as_query
 from cbrd_dup.evaluate import Query
-from cbrd_dup.index import CHUNK_TERMS, FTS, Index
+from cbrd_dup.index import Field, Index
 from cbrd_dup.jira import key_number
 from cbrd_dup.text import stack_functions, tokenize
 
 NEG = -np.inf
 DAY = 86400.0
 DENSE = ("D", "TD")
+K1 = 1.5
+B = 0.75
 
 
 @dataclass(frozen=True)
@@ -49,7 +58,7 @@ class Method:
     def config(self, model_id: str | None) -> dict:
         return asdict(self) | {
             "model": model_id if self.dense else None,
-            "lexical": f"sqlite fts5 bm25, {FTS.split('tokenize=')[1].rstrip(')')}, {CHUNK_TERMS} terms per query",
+            "lexical": f"lucene bm25 as in bm25s, k1 {K1}, b {B}, text.tokenize tokens, repeated query tokens count",
             "fusion": "sum(w / (rrf_k + rank)) + recency / (1 + age_days / recency_days) / (rrf_k + 1)",
         }
 
@@ -88,7 +97,7 @@ class Searcher:
         self.index, self.method, self.embedder, self.clock = index, method, embedder, clock
         self.arrays = index.arrays()
         self.position = self.arrays.position
-        self.by_number = {key_number(key): n for n, key in enumerate(self.arrays.keys)}
+        self.numbers = np.array([key_number(key) for key in self.arrays.keys], np.int64)
         self.config = method.config(embedder.model_id if embedder else None)
 
     def search(self, query: Query, k: int) -> list[str]:
@@ -141,14 +150,28 @@ class Searcher:
         return out
 
     def _rows_bm25(self, tokens: list[str], row_ok: np.ndarray) -> np.ndarray:
-        rowids, values = self.index.bm25("rows_fts", tokens)
-        rows = np.searchsorted(self.arrays.row_ids, rowids)
-        row_scores = np.zeros(len(self.arrays.row_ids))
-        row_scores[rows] = values
+        row_scores = self.bm25("rows", tokens)
         return self._best_row(row_scores, row_ok & (row_scores > 0))
 
     def _titles_bm25(self, tokens: list[str], issue_ok: np.ndarray) -> np.ndarray:
-        numbers, values = self.index.bm25("titles_fts", tokens)
-        out = np.full(len(self.arrays.keys), NEG)
-        out[[self.by_number[n] for n in numbers.tolist()]] = values
-        return np.where(issue_ok & (out > 0), out, NEG)
+        scores = self.bm25("titles", tokens)
+        return np.where(issue_ok & (scores > 0), scores, NEG)
+
+    def bm25(self, field: Field, tokens: list[str]) -> np.ndarray:
+        """The BM25 of every row (in `arrays.row_ids` order) or every summary (in issue order) for `tokens`."""
+        a = self.arrays
+        ids, lengths = (a.row_ids, a.row_tokens) if field == "rows" else (self.numbers, a.title_tokens)
+        n, avgdl = len(ids), lengths.mean() if len(ids) else 1.0
+        counts = Counter(tokens)
+        positions, weights = [], []
+        for term, docs, tfs in self.index.postings(field, counts):
+            idf = math.log(1 + (n - len(docs) + 0.5) / (len(docs) + 0.5))
+            at = np.searchsorted(ids, docs)
+            # A sync in another process may have added documents after this searcher loaded the arrays.
+            known = (at < n) & (ids[at.clip(max=n - 1)] == docs)
+            at, tf = at[known], tfs[known]
+            positions.append(at)
+            weights.append(counts[term] * idf * tf / (tf + K1 * (1 - B + B * lengths[at] / avgdl)))
+        if not positions:
+            return np.zeros(n)
+        return np.bincount(np.concatenate(positions), np.concatenate(weights), minlength=n)
