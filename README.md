@@ -8,6 +8,7 @@ CUBRID JIRA(`jira.cubrid.org`)의 CBRD 프로젝트에서 새 이슈를 등록�
 
 - [요구사항](docs/requirements.md). PoC가 만족해야 할 조건, 평가 방법, 합격 기준, 결정 기록.
 - [근거 측정](docs/evidence.md). 정답 쌍, 현재 JQL 검색의 기준선, 생성 시각 차, 제목 언어 혼합, 생성량.
+- [후보 검색 방식 비교](docs/candidate-search.md). LanceDB, Meilisearch, 리랭커와 비교한 recall과 비용, 고른 이유, recall의 상한.
 - [요구사항 리뷰](docs/reviews/requirements-review.md). 독립 리뷰 17건과 그 근거.
 - [이슈 작성 브리프](docs/issue-brief.md). CBRD-27978을 쓸 때 쓴 측정값과 지시.
 
