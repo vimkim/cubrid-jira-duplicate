@@ -1,12 +1,12 @@
-# CBRD 중복 이슈 검사기 PoC
+# CBRD 중복 이슈 검사기
 
-CUBRID JIRA(`jira.cubrid.org`)의 CBRD 프로젝트에서 새 이슈를 등록하기 전과 후에, 이미 등록된 중복·관련 이슈를 찾아 주는 검사기의 PoC 저장소다. 관련 이슈는 [CBRD-27978](https://jira.cubrid.org/browse/CBRD-27978)이다.
+CUBRID JIRA(`jira.cubrid.org`)의 CBRD 프로젝트에서 새 이슈를 등록하기 전과 후에, 이미 등록된 중복·관련 이슈를 찾아 주는 검사기의 저장소다. 관련 이슈는 [CBRD-27978](https://jira.cubrid.org/browse/CBRD-27978)이다.
 
 `cubrid-jira-dup candidate-find`는 초안이나 이슈 키를 받아, 중복이거나 관련 있을 수 있는 기존 CBRD 이슈를 순위대로 제안한다. 후보가 정말 중복인지는 이 도구가 정하지 않는다. 출력을 읽는 LLM(예: Opus 5.5)이나 사람이 정한다. GPU 없이 CPU만으로 돈다.
 
 ## 문서
 
-- [요구사항](docs/requirements.md). PoC가 만족해야 할 조건, 평가 방법, 합격 기준, 결정 기록.
+- [요구사항](docs/requirements.md). 검사기가 만족해야 할 조건, 평가 방법, 합격 기준, 결정 기록.
 - [근거 측정](docs/evidence.md). 정답 쌍, 현재 JQL 검색의 기준선, 생성 시각 차, 제목 언어 혼합, 생성량.
 - [후보 검색 방식 비교](docs/candidate-search.md). LanceDB, Meilisearch, 리랭커와 비교한 recall과 비용, 고른 이유, recall의 상한.
 - [요구사항 리뷰](docs/reviews/requirements-review.md). 독립 리뷰 17건과 그 근거.
