@@ -50,11 +50,11 @@ Python 3.12 이상, [uv](https://docs.astral.sh/uv/), [just](https://github.com/
 ```bash
 git clone https://github.com/vimkim/cubrid-jira-duplicate.git
 cd cubrid-jira-duplicate
-just sync
+just install
 cubrid-jira-dup candidate-find CBRD-27944
 ```
 
-`just sync`는 CLI를 설치한다. 첫 검색은 공개 CBRD 이슈 전체를 받아 로컬 인덱스를 만들고, 약 470 MB의 임베딩 모델을 내려받는다. 개발 서버의 기존 측정에서는 모델 다운로드를 제외하고 13분 31초가 걸렸다. 이후에는 바뀐 이슈와 글만 갱신한다. [첫 실행의 측정 조건](docs/usage.md#첫-실행)을 확인한다.
+`just install`은 `uv tool install --reinstall .`로 CLI를 설치한다. 첫 검색은 공개 CBRD 이슈 전체를 받아 로컬 인덱스를 만들고, 약 470 MB의 임베딩 모델을 내려받는다. 개발 서버의 기존 측정에서는 모델 다운로드를 제외하고 13분 31초가 걸렸다. 이후에는 바뀐 이슈와 글만 갱신한다. [첫 실행의 측정 조건](docs/usage.md#첫-실행)을 확인한다.
 
 ### 초안이나 제목으로 검색
 
