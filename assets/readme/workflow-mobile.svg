@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="600" height="600" viewBox="0 0 600 600" role="img" aria-labelledby="title desc">
+  <title id="title">CBRD 중복·관련 후보 검색 흐름</title>
+  <desc id="desc">CBRD-27944를 입력해 BM25와 다국어 임베딩으로 로컬 검색한 예시다. 상위 후보는 CBRD-27945, CBRD-27925, CBRD-27872다. 중복 판정은 사람이나 LLM이 맡는다.</desc>
+  <rect width="600" height="600" rx="16" fill="#F4F2E9"/>
+  <g font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans CJK KR', sans-serif">
+    <text x="40" y="48" font-size="22" font-weight="600" fill="#64766C">CUBRID JIRA / CBRD</text>
+    <text x="40" y="107" font-size="44" font-weight="750" fill="#192D28">기존 이슈에서 후보 찾기.</text>
+    <g id="input">
+      <text x="40" y="180" font-size="28" fill="#64766C">01 / 입력</text>
+      <text x="242" y="180" font-size="32" font-weight="650" fill="#192D28" font-family="ui-monospace, 'DejaVu Sans Mono', monospace">CBRD-27944</text>
+      <text x="242" y="219" font-size="24" fill="#64766C">초안 · 키 · 제목과 본문</text>
+    </g>
+    <g id="retrieval">
+      <text x="40" y="294" font-size="28" fill="#64766C">02 / 검색</text>
+      <text x="242" y="294" font-size="30" font-weight="650" fill="#386A55">BM25 + 임베딩</text>
+      <text x="242" y="333" font-size="24" fill="#64766C">CPU · 로컬 인덱스</text>
+    </g>
+    <g id="ranked-candidates">
+      <text x="40" y="409" font-size="28" fill="#64766C">03 / 후보</text>
+      <g font-family="ui-monospace, 'DejaVu Sans Mono', monospace" font-size="32" fill="#192D28">
+        <text x="242" y="409"><tspan fill="#C66246">1</tspan><tspan dx="16">CBRD-27945</tspan></text>
+        <text x="242" y="451"><tspan fill="#64766C">2</tspan><tspan dx="16">CBRD-27925</tspan></text>
+        <text x="242" y="493"><tspan fill="#64766C">3</tspan><tspan dx="16">CBRD-27872</tspan></text>
+      </g>
+    </g>
+    <g stroke="#64766C" stroke-opacity=".25">
+      <path d="M40 244H560"/>
+      <path d="M40 359H560"/>
+      <path d="M40 528H560"/>
+    </g>
+    <text x="40" y="570" font-size="28" font-weight="600" fill="#192D28">최종 판정은 사람이나 LLM이.</text>
+  </g>
+</svg>

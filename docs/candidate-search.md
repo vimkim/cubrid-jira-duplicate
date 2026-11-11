@@ -1,6 +1,6 @@
 # 후보 검색 방식 비교
 
-작성일 2026-11-09. `cubrid-jira-dup candidate-find`의 검색 방식을 어떻게 골랐는지 적는다. 사용법과 지금 방식의 수치는 [README](../README.md)의 "후보 찾기"에 있다.
+작성일 2026-11-09. `cubrid-jira-dup candidate-find`의 검색 방식을 어떻게 골랐는지 적는다. 사용법은 [README](../README.md), 검색 방식과 측정 기록은 [상세 사용법](usage.md)에 있다.
 
 ## 결론
 
